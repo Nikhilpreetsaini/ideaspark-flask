@@ -26,7 +26,7 @@ import sqlite3
 import csv
 import io
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from collections import Counter, defaultdict
 from flask import (
     Flask,
@@ -68,6 +68,8 @@ def init_db() -> None:
             upvotes INTEGER DEFAULT 0,
             favourite INTEGER DEFAULT 0,
             archived INTEGER DEFAULT 0,
+            -- Track the progress of an idea (Not Started, In Progress, Completed)
+            status TEXT DEFAULT 'Not Started',
             created_at TEXT NOT NULL
         )
         """
@@ -94,6 +96,9 @@ def init_db() -> None:
         alterations.append("ALTER TABLE ideas ADD COLUMN favourite INTEGER DEFAULT 0")
     if "archived" not in existing_cols:
         alterations.append("ALTER TABLE ideas ADD COLUMN archived INTEGER DEFAULT 0")
+    # Add a status column when upgrading from older schemas
+    if "status" not in existing_cols:
+        alterations.append("ALTER TABLE ideas ADD COLUMN status TEXT DEFAULT 'Not Started'")
     for sql in alterations:
         conn.execute(sql)
     conn.commit()
@@ -166,6 +171,41 @@ def badge_for_count(count: int) -> str | None:
         return "Novice"
     else:
         return None
+
+
+# ---------------------------------------------------------------------------
+# Achievements system
+#
+# In addition to badges for idea counts, we award achievements for overall
+# engagement across upvotes, comments and favourites. These badges
+# celebrate different patterns of use and provide extra goals for users.
+def achievements_for_stats(
+    total_ideas: int, total_upvotes: int, total_comments: int, total_favourites: int
+) -> list[str]:
+    """Return a list of achievement labels based on usage statistics.
+
+    Achievements are granted at the following milestones:
+
+    * Upvotes: 10 (Supporter), 50 (Super Fan)
+    * Comments: 5 (Commentator), 20 (Conversationalist)
+    * Favourites: 5 (Taste Maker), 15 (Super Taste)
+
+    Additional achievements can be added here in future updates.
+    """
+    achievements: list[str] = []
+    if total_upvotes >= 50:
+        achievements.append("Super Fan")
+    elif total_upvotes >= 10:
+        achievements.append("Supporter")
+    if total_comments >= 20:
+        achievements.append("Conversationalist")
+    elif total_comments >= 5:
+        achievements.append("Commentator")
+    if total_favourites >= 15:
+        achievements.append("Super Taste")
+    elif total_favourites >= 5:
+        achievements.append("Taste Maker")
+    return achievements
 
 
 @app.route("/")
@@ -257,6 +297,20 @@ def home():
     # Determine badge based on the number of ideas shown
     badge_label = badge_for_count(len(filtered_ideas))
 
+    # Compute overall statistics across all ideas (not just filtered) for the stats card
+    total_ideas = len(ideas)
+    total_upvotes = sum(int(it.get("upvotes", 0) or 0) for it in ideas)
+    total_comments = sum(len(comments_by_idea.get(it["id"], [])) for it in ideas)
+    total_favourites = sum(1 for it in ideas if it.get("favourite", 0) == 1)
+    stats = {
+        "ideas": total_ideas,
+        "upvotes": total_upvotes,
+        "comments": total_comments,
+        "favourites": total_favourites,
+    }
+    # Derive achievements based on stats
+    achievements = achievements_for_stats(total_ideas, total_upvotes, total_comments, total_favourites)
+
     return render_template(
         "index.html",
         app_name=APP_NAME,
@@ -271,6 +325,8 @@ def home():
         top_tags=top_tags,
         mood_counts_json=mood_counts_json,
         badge_label=badge_label,
+        stats=stats,
+        achievements=achievements,
     )
 
 
@@ -356,10 +412,18 @@ def edit_idea(idea_id: int):
         notes = (request.form.get("notes") or "").strip()
         tags_raw = (request.form.get("tags") or "").strip()
         mood = int(request.form.get("mood") or 3)
+        # Read status if provided, otherwise keep existing
+        new_status = (request.form.get("status") or "").strip()
+        allowed_status = {"Not Started", "In Progress", "Completed"}
+        if not new_status or new_status not in allowed_status:
+            # fetch current status from DB
+            cur = conn.execute("SELECT status FROM ideas WHERE id = ?", (idea_id,))
+            row = cur.fetchone()
+            new_status = row[0] if row else "Not Started"
         tags = ",".join([t.strip().lower() for t in tags_raw.split(",") if t.strip()])
         conn.execute(
-            "UPDATE ideas SET title = ?, notes = ?, tags = ?, mood = ? WHERE id = ?",
-            (title, notes, tags, mood, idea_id),
+            "UPDATE ideas SET title = ?, notes = ?, tags = ?, mood = ?, status = ? WHERE id = ?",
+            (title, notes, tags, mood, new_status, idea_id),
         )
         conn.commit()
         conn.close()
@@ -484,6 +548,82 @@ def api_plan(idea_id: int) -> Response:
         "steps": steps,
         "test": test,
     })
+
+
+# ---------------------------------------------------------------------------
+# Additional API endpoints
+
+@app.route("/api/stats")
+def api_stats() -> Response:
+    """Return aggregate statistics across all active ideas as JSON.
+
+    Statistics include counts of ideas, total upvotes, total comments and
+    total favourites. Archived ideas are excluded from these tallies.
+    """
+    conn = get_db()
+    # Select active ideas only
+    ideas = [dict(row) for row in conn.execute("SELECT * FROM ideas WHERE archived = 0").fetchall()]
+    # Comments count
+    comment_counts = Counter()
+    for row in conn.execute("SELECT idea_id FROM comments").fetchall():
+        comment_counts[row[0]] += 1
+    conn.close()
+    total_ideas = len(ideas)
+    total_upvotes = sum(int(it.get("upvotes", 0) or 0) for it in ideas)
+    total_comments = sum(comment_counts.get(it["id"], 0) for it in ideas)
+    total_favourites = sum(1 for it in ideas if it.get("favourite", 0) == 1)
+    return jsonify({
+        "ideas": total_ideas,
+        "upvotes": total_upvotes,
+        "comments": total_comments,
+        "favourites": total_favourites,
+    })
+
+
+@app.route("/api/timeline")
+def api_timeline() -> Response:
+    """Return counts of ideas per day for the last 7 days (UTC) as JSON.
+
+    The response is a list of objects with `date` (ISO YYYY-MM-DD) and `count` keys.
+    Only non-archived ideas are counted.
+    """
+    today = datetime.utcnow().date()
+    start_date = today - timedelta(days=6)
+    # Prepare dictionary with zero counts
+    date_counts = { (start_date + timedelta(days=i)).isoformat(): 0 for i in range(7) }
+    conn = get_db()
+    rows = conn.execute("SELECT created_at FROM ideas WHERE archived = 0").fetchall()
+    conn.close()
+    for row in rows:
+        ts = row[0]
+        try:
+            d = datetime.fromisoformat(ts).date()
+        except Exception:
+            continue
+        if start_date <= d <= today:
+            iso = d.isoformat()
+            date_counts[iso] += 1
+    # Convert to sorted list
+    timeline = [ { "date": iso, "count": date_counts[iso] } for iso in sorted(date_counts.keys()) ]
+    return jsonify(timeline)
+
+
+@app.route("/status/<int:idea_id>", methods=["POST"])
+def update_status(idea_id: int) -> Response:
+    """Update the status of an idea.
+
+    Accepts a `status` value from the POST body and updates the corresponding
+    record. The status must be one of: Not Started, In Progress or Completed.
+    """
+    new_status = (request.form.get("status") or "").strip()
+    allowed = {"Not Started", "In Progress", "Completed"}
+    if new_status not in allowed:
+        return redirect(url_for("home"))
+    conn = get_db()
+    conn.execute("UPDATE ideas SET status = ? WHERE id = ?", (new_status, idea_id))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("home"))
 
 
 if __name__ == "__main__":
