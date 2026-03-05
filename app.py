@@ -10,7 +10,6 @@ DB_PATH = os.path.join(os.path.dirname(__file__), "ideas.db")
 app = Flask(__name__)
 
 
-
 def get_db():
     """
     Open a connection to the SQLite database.  The connection uses row
@@ -19,7 +18,6 @@ def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
-
 
 
 def init_db():
@@ -39,6 +37,9 @@ def init_db():
     )
     conn.commit()
     conn.close()
+
+# Initialize the database when the module is imported (important for Gunicorn)
+init_db()
 
 
 @app.route("/")
@@ -132,6 +133,7 @@ def api_ideas():
 
 
 if __name__ == "__main__":
+    # Initialize database when running directly
     init_db()
     port = int(os.environ.get("PORT", "5000"))
     app.run(host="0.0.0.0", port=port)
