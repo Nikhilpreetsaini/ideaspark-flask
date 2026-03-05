@@ -10,14 +10,38 @@
     .moodbar { height: 8px; border-radius: 999px; overflow: hidden; background: rgba(0,0,0,.08); }
     .moodfill { height: 100%; }
     .card-comment { background: #f9fafb; border-radius: .25rem; padding: .5rem .75rem; }
+    /* Dark mode overrides */
+    body.dark-mode { background-color: #121212; color: #e0e0e0; }
+    body.dark-mode .bg-light { background-color: #1e1e1e !important; }
+    body.dark-mode .bg-white { background-color: #1e1e1e !important; }
+    body.dark-mode .navbar { background-color: #1e1e1e; border-color: #333; }
+    body.dark-mode .card { background-color: #1f1f1f; border-color: #333; }
+    body.dark-mode .card-comment { background: #2a2a2a; color: #e0e0e0; }
+    body.dark-mode .chip { border-color: rgba(255,255,255,.3); }
+    body.dark-mode .form-control, body.dark-mode .form-select { background-color: #2a2a2a; color: #e0e0e0; border-color: #444; }
+    body.dark-mode .form-control::placeholder { color: #888; }
+    body.dark-mode .btn-outline-secondary { color: #ddd; border-color: #555; }
+    body.dark-mode .btn-outline-primary { color: #0d6efd; border-color: #0d6efd; }
+    body.dark-mode .btn-outline-warning { color: #ffc107; border-color: #ffc107; }
+    body.dark-mode .btn-outline-danger { color: #dc3545; border-color: #dc3545; }
+    body.dark-mode .btn-outline-info { color: #0dcaf0; border-color: #0dcaf0; }
+    body.dark-mode .btn-outline-secondary:hover, body.dark-mode .btn-outline-primary:hover,
+    body.dark-mode .btn-outline-warning:hover, body.dark-mode .btn-outline-danger:hover,
+    body.dark-mode .btn-outline-info:hover { color: #fff; }
   </style>
 </head>
 <body class="bg-light">
 
 <nav class="navbar navbar-expand-lg bg-white border-bottom">
-  <div class="container">
+  <div class="container d-flex align-items-center gap-3">
     <span class="navbar-brand fw-bold">{{ app_name }}</span>
-    <span class="text-muted small">Capture, tag and review your ideas.</span>
+    <span class="text-muted small flex-grow-1">Capture, tag and review your ideas.</span>
+    <div class="d-flex align-items-center gap-3 ms-auto">
+      {% if badge_label %}
+        <span class="badge bg-primary">{{ badge_label }}</span>
+      {% endif %}
+      <button id="themeToggle" class="btn btn-sm btn-outline-secondary" title="Toggle dark/light theme">🌙</button>
+    </div>
   </div>
 </nav>
 
@@ -97,42 +121,87 @@
       </div>
     </div>
 
+<!-- Modal for action plan -->
+<div class="modal fade" id="planModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Action Plan</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div id="planContent" class="vstack gap-3"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
     <!-- Right column: chart and ideas list -->
     <div class="col-lg-8">
-      <div class="card shadow-sm mb-3">
-        <div class="card-body">
-          <h6 class="mb-3">Mood distribution</h6>
-          <canvas id="moodChart" height="120"></canvas>
-        </div>
-      </div>
-
-      <!-- Curiosity Engine card: Daily Spark, Intrigue Mode & Spotlight -->
-      <div class="card shadow-sm mb-3">
-        <div class="card-body d-flex flex-column gap-2">
-          <div class="d-flex justify-content-between align-items-center">
-            <h6 class="m-0">🔥 Daily Spark</h6>
-            <div class="form-check form-switch m-0">
-              <input class="form-check-input" type="checkbox" id="intrigueMode">
-              <label class="form-check-label small" for="intrigueMode">Intrigue Mode</label>
+      <!-- Grouped row: compact mood chart and Daily Spark -->
+      <div class="row g-3 mb-3">
+        <!-- Compact Mood Chart -->
+        <div class="col-md-7">
+          <div class="card shadow-sm h-100">
+            <div class="card-body">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <h6 class="m-0">Mood distribution</h6>
+                <span class="text-muted small">compact</span>
+              </div>
+              <div style="height: 180px;">
+                <canvas id="moodChart"></canvas>
+              </div>
             </div>
           </div>
-          <div class="p-2 rounded bg-light border" id="dailyPromptBox">
-            <span class="text-muted small">Loading prompt…</span>
-          </div>
-          <div class="d-flex gap-2 flex-wrap">
-            <button class="btn btn-sm btn-primary" id="btnNewPrompt">🎲 Roulette Prompt</button>
-            <button class="btn btn-sm btn-outline-secondary" id="btnCopyPrompt">📋 Copy</button>
-            <a class="btn btn-sm btn-outline-primary" href="/export.json">⬇ Export JSON</a>
-          </div>
-          <div class="small text-muted" id="streakLine"></div>
-          <hr class="my-2">
-          <div>
-            <h6 class="m-0">🏆 Spotlight (Top Idea)</h6>
-            <div class="text-muted small" id="spotlightBox">Loading…</div>
+        </div>
+        <!-- Daily Spark Card -->
+        <div class="col-md-5">
+          <div class="card shadow-sm h-100">
+            <div class="card-body d-flex flex-column gap-2">
+              <div class="d-flex justify-content-between align-items-center">
+                <h6 class="m-0">🔥 Daily Spark</h6>
+                <div class="form-check form-switch m-0">
+                  <input class="form-check-input" type="checkbox" id="intrigueMode">
+                  <label class="form-check-label small" for="intrigueMode">Intrigue Mode</label>
+                </div>
+              </div>
+              <div class="p-2 rounded bg-light border" id="dailyPromptBox">
+                <span class="text-muted small">Loading prompt…</span>
+              </div>
+              <div class="d-flex gap-2 flex-wrap">
+                <button class="btn btn-sm btn-primary" id="btnNewPrompt">🎲 Roulette Prompt</button>
+                <button class="btn btn-sm btn-outline-secondary" id="btnCopyPrompt">📋 Copy</button>
+                <a class="btn btn-sm btn-outline-primary" href="/export.json">⬇ Export JSON</a>
+              </div>
+              <div class="small text-muted" id="streakLine"></div>
+              <hr class="my-2">
+              <div>
+                <h6 class="m-0">🏆 Spotlight (Top Idea)</h6>
+                <div class="text-muted small" id="spotlightBox">Loading…</div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
-      <!-- End curiosity card -->
+      <!-- Challenge Mode card -->
+      <div class="card shadow-sm mb-3">
+        <div class="card-body">
+          <div class="d-flex justify-content-between align-items-center">
+            <h6 class="m-0">🏁 Challenge Mode</h6>
+            <div class="form-check form-switch m-0">
+              <input class="form-check-input" type="checkbox" id="challengeToggle">
+              <label class="form-check-label small" for="challengeToggle">Start</label>
+            </div>
+          </div>
+          <div class="mt-2">
+            <div id="challengeProgress" class="d-flex gap-1"></div>
+            <div class="small text-muted mt-1" id="challengeStatus"></div>
+          </div>
+        </div>
+      </div>
 
       <div class="d-flex align-items-center justify-content-between mb-2">
         <h5 class="m-0">Your ideas</h5>
@@ -208,6 +277,10 @@
                         {% if it['favourite'] %}★{% else %}☆{% endif %}
                       </button>
                     </form>
+    <!-- Action Plan button -->
+    <button type="button" class="btn btn-outline-info btn-sm" title="Generate plan" data-plan data-id="{{ it['id'] }}">
+      🧭 Plan
+    </button>
                     <a href="/edit/{{ it['id'] }}" class="btn btn-outline-secondary btn-sm">Edit</a>
                     <form method="post" action="/delete/{{ it['id'] }}">
                       <button class="btn btn-outline-danger btn-sm">Delete</button>
@@ -228,6 +301,10 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<!-- Bootstrap JS for modals and interactive components -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<!-- Confetti library for celebratory feedback -->
+<script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.5.1/dist/confetti.browser.min.js"></script>
 <script>
   (function() {
     const moodData = {{ mood_counts_json|safe }};
@@ -396,6 +473,166 @@
       loadDailyPrompt();
       loadSpotlight();
     })();
+  })();
+</script>
+
+<!-- Additional enhancements: Dark mode, Challenge progress, Plan modal and Confetti -->
+<script>
+  (function() {
+    // ---- Dark mode toggle ----
+    const themeBtn = document.getElementById('themeToggle');
+    function applyTheme() {
+      const dark = localStorage.getItem('ideaspark_dark') === '1';
+      document.body.classList.toggle('dark-mode', dark);
+      if (themeBtn) themeBtn.textContent = dark ? '🌞' : '🌙';
+    }
+    if (themeBtn) {
+      applyTheme();
+      themeBtn.addEventListener('click', () => {
+        const current = localStorage.getItem('ideaspark_dark') === '1';
+        localStorage.setItem('ideaspark_dark', current ? '0' : '1');
+        applyTheme();
+      });
+    }
+
+    // ---- Challenge progress ----
+    async function getIdeas() {
+      try {
+        const r = await fetch('/api/ideas');
+        return await r.json();
+      } catch {
+        return [];
+      }
+    }
+    async function renderChallengeProgress() {
+      const container = document.getElementById('challengeProgress');
+      const statusEl = document.getElementById('challengeStatus');
+      const start = localStorage.getItem('ideaspark_challenge_start');
+      if (!container || !statusEl) return;
+      container.innerHTML = '';
+      if (!start) {
+        statusEl.textContent = 'Start a 7‑day streak by toggling above.';
+        return;
+      }
+      const startDate = new Date(start);
+      const now = new Date();
+      const ideas = await getIdeas();
+      // group ideas by date
+      const dates = new Set();
+      ideas.forEach(it => {
+        const d = new Date(it.created_at);
+        const iso = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())).toISOString().slice(0,10);
+        dates.add(iso);
+      });
+      let completedDays = 0;
+      for (let i = 0; i < 7; i++) {
+        const day = new Date(startDate);
+        day.setDate(startDate.getDate() + i);
+        const iso = day.toISOString().slice(0,10);
+        const seg = document.createElement('div');
+        seg.style.flex = '1';
+        seg.style.height = '8px';
+        seg.style.borderRadius = '4px';
+        const hasIdea = dates.has(iso);
+        if (hasIdea) completedDays++;
+        seg.style.background = hasIdea ? 'rgba(13,110,253,.75)' : 'rgba(0,0,0,.1)';
+        container.appendChild(seg);
+      }
+      if (completedDays >= 7) {
+        statusEl.textContent = 'Challenge complete! 🎉';
+        // celebrate only once per completion
+        if (!localStorage.getItem('ideaspark_challenge_done')) {
+          if (typeof confetti === 'function') {
+            confetti({ particleCount: 150, spread: 120, origin: { y: 0.3 } });
+          }
+          localStorage.setItem('ideaspark_challenge_done', '1');
+        }
+      } else {
+        statusEl.textContent = `Day ${completedDays + 1} of 7`;
+        localStorage.removeItem('ideaspark_challenge_done');
+      }
+    }
+    const challengeToggle = document.getElementById('challengeToggle');
+    if (challengeToggle) {
+      // initialise toggle state
+      challengeToggle.checked = !!localStorage.getItem('ideaspark_challenge_start');
+      challengeToggle.addEventListener('change', (e) => {
+        if (e.target.checked) {
+          localStorage.setItem('ideaspark_challenge_start', new Date().toISOString());
+        } else {
+          localStorage.removeItem('ideaspark_challenge_start');
+          localStorage.removeItem('ideaspark_challenge_done');
+        }
+        renderChallengeProgress();
+      });
+      // Render progress on load
+      renderChallengeProgress();
+    }
+
+    // ---- Plan modal ----
+    const planModalEl = document.getElementById('planModal');
+    const planModal = planModalEl ? new bootstrap.Modal(planModalEl) : null;
+    document.querySelectorAll('[data-plan]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const id = btn.getAttribute('data-id');
+        try {
+          const r = await fetch(`/api/plan/${id}`);
+          const data = await r.json();
+          const content = document.getElementById('planContent');
+          if (content) {
+            content.innerHTML = '';
+            const heading = document.createElement('h6');
+            heading.textContent = data.title;
+            const overview = document.createElement('p');
+            overview.textContent = data.overview;
+            const audTitle = document.createElement('h6');
+            audTitle.textContent = 'Audience';
+            const audP = document.createElement('p');
+            audP.textContent = data.audience;
+            const stepsTitle = document.createElement('h6');
+            stepsTitle.textContent = 'Steps';
+            const ol = document.createElement('ol');
+            data.steps.forEach(step => {
+              const li = document.createElement('li');
+              li.textContent = step;
+              ol.appendChild(li);
+            });
+            const testTitle = document.createElement('h6');
+            testTitle.textContent = '1‑Day Test';
+            const testP = document.createElement('p');
+            testP.textContent = data.test;
+            content.appendChild(heading);
+            content.appendChild(overview);
+            content.appendChild(audTitle);
+            content.appendChild(audP);
+            content.appendChild(stepsTitle);
+            content.appendChild(ol);
+            content.appendChild(testTitle);
+            content.appendChild(testP);
+          }
+          if (planModal) planModal.show();
+        } catch {
+          alert('Failed to load plan.');
+        }
+      });
+    });
+
+    // ---- Confetti on interactions ----
+    // Add confetti on upvotes and new idea submissions
+    if (typeof confetti === 'function') {
+      document.querySelectorAll('form[action^="/upvote/"]').forEach(f => {
+        f.addEventListener('submit', () => {
+          confetti({ particleCount: 50, spread: 80, origin: { y: 0.2 } });
+        });
+      });
+      const addForm = document.querySelector('form[action="/add"]');
+      if (addForm) {
+        addForm.addEventListener('submit', () => {
+          confetti({ particleCount: 80, spread: 90, origin: { y: 0.2 } });
+        });
+      }
+    }
+
   })();
 </script>
 </body>

@@ -141,6 +141,33 @@ def get_daily_prompt() -> str:
     return PROMPT_BANK[seed % len(PROMPT_BANK)]
 
 
+# ---------------------------------------------------------------------------
+# Badge system
+#
+# To encourage continued use of the app and celebrate milestones, we expose a
+# simple badge system.  The more ideas you collect, the higher your badge
+# rank becomes.  This can motivate users to reach the next level and adds a
+# fun gamified touch to the interface.  The badge names deliberately grow
+# from small to epic.
+
+def badge_for_count(count: int) -> str | None:
+    """Return a badge label based on the number of active ideas.
+
+    Badges are awarded at 5, 10, 20 and 50+ ideas.  If the count is below
+    the first threshold, no badge is returned (None).
+    """
+    if count >= 50:
+        return "Master Innovator"
+    elif count >= 20:
+        return "Visionary"
+    elif count >= 10:
+        return "Builder"
+    elif count >= 5:
+        return "Novice"
+    else:
+        return None
+
+
 @app.route("/")
 def home():
     """
@@ -227,6 +254,9 @@ def home():
     # Convert mood counts to JSON for Chart.js
     mood_counts_json = json.dumps(mood_counts)
 
+    # Determine badge based on the number of ideas shown
+    badge_label = badge_for_count(len(filtered_ideas))
+
     return render_template(
         "index.html",
         app_name=APP_NAME,
@@ -240,6 +270,7 @@ def home():
         all_tags=all_tags,
         top_tags=top_tags,
         mood_counts_json=mood_counts_json,
+        badge_label=badge_label,
     )
 
 
@@ -409,6 +440,50 @@ def api_ideas() -> Response:
     rows = conn.execute("SELECT * FROM ideas ORDER BY id DESC").fetchall()
     conn.close()
     return jsonify([dict(row) for row in rows])
+
+
+# ---------------------------------------------------------------------------
+# Action plan generator
+#
+# For each idea we can generate a simple roadmap to turn the concept into
+# reality.  The plan outlines a target audience, high‑level steps, and a
+# one‑day experiment.  This is intentionally basic and can be extended
+# further in future updates (for example by incorporating AI suggestions).
+
+@app.route("/api/plan/<int:idea_id>")
+def api_plan(idea_id: int) -> Response:
+    """Return a basic action plan for the given idea as JSON.
+
+    The plan includes a title, a short overview, an audience description,
+    a list of steps and a one‑day test suggestion.  If the idea does not
+    exist, a 404 JSON error is returned.
+    """
+    conn = get_db()
+    row = conn.execute("SELECT * FROM ideas WHERE id = ?", (idea_id,)).fetchone()
+    conn.close()
+    if not row:
+        return jsonify({"error": "Idea not found"}), 404
+    idea = dict(row)
+    title = idea.get("title", "Your idea")
+    # Audience based on tags
+    tags = [t.strip() for t in (idea.get("tags") or "").split(",") if t.strip()]
+    audience = f"people interested in {', '.join(tags)}" if tags else "a general audience"
+    overview = f"This plan helps you turn '{title}' into a real product."  # basic overview
+    steps = [
+        "Write down your core problem and solution in one paragraph.",
+        "Create a simple prototype or mock‑up using tools you know (paper, slides or software).",
+        "Show the prototype to 3–5 members of your target audience and gather feedback."
+    ]
+    test = (
+        "Within a day, share your idea on social media or with friends and observe how they respond."
+    )
+    return jsonify({
+        "title": title,
+        "overview": overview,
+        "audience": audience.capitalize(),
+        "steps": steps,
+        "test": test,
+    })
 
 
 if __name__ == "__main__":
