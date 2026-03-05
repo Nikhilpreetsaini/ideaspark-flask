@@ -103,6 +103,43 @@ def init_db() -> None:
 # Initialize database at import time (important for Gunicorn workers)
 init_db()
 
+# --------------------------
+# Curiosity / Prompt engine
+# --------------------------
+
+# A bank of curiosity prompts to generate daily or roulette ideas. These are intentionally
+# thought‑provoking to spur creative thinking and can be expanded freely. They are used by
+# the API endpoints and the Intrigue Mode on the frontend.
+PROMPT_BANK = [
+    "What would you build if failure was impossible?",
+    "What’s a problem you secretly want to solve because it annoys you daily?",
+    "If you had to earn ₹1 lakh in 7 days ethically, what’s your first move?",
+    "What is one thing you can simplify by 10x for beginners?",
+    "What would your ‘future self’ beg you to start today?",
+    "What’s a feature everyone hates… but still uses? Why?",
+    "If your idea had to work without an app, how would it still work?",
+    "What tiny habit would compound massively in 90 days?",
+    "What’s the most unfair advantage you can create for yourself this month?",
+    "What’s the fastest way to test your idea with real people in 24 hours?",
+    "Turn your biggest fear into a product: what is it?",
+    "What would you build for your parents to make their life easier?",
+]
+
+
+def _seed_for_today() -> int:
+    """Return a deterministic integer seed based on the current UTC date.
+
+    This makes the daily prompt consistent for a given day no matter where the server runs.
+    """
+    d = datetime.utcnow().date().isoformat()
+    return sum(ord(c) for c in d)
+
+
+def get_daily_prompt() -> str:
+    """Select a prompt from the bank based on today’s seed."""
+    seed = _seed_for_today()
+    return PROMPT_BANK[seed % len(PROMPT_BANK)]
+
 
 @app.route("/")
 def home():
@@ -332,6 +369,37 @@ def export_csv() -> Response:
         mimetype="text/csv",
         headers={"Content-Disposition": "attachment; filename=ideas.csv"},
     )
+
+
+@app.route("/export.json")
+def export_json() -> Response:
+    """Export all ideas as JSON for offline use or API consumption."""
+    conn = get_db()
+    rows = conn.execute("SELECT * FROM ideas ORDER BY id ASC").fetchall()
+    conn.close()
+    payload = json.dumps([dict(r) for r in rows], ensure_ascii=False, indent=2)
+    return Response(
+        payload,
+        mimetype="application/json",
+        headers={"Content-Disposition": "attachment; filename=ideas.json"},
+    )
+
+
+@app.route("/api/prompt")
+def api_prompt() -> Response:
+    """Return the daily curiosity prompt as JSON."""
+    return jsonify({"prompt": get_daily_prompt(), "date_utc": datetime.utcnow().date().isoformat()})
+
+
+@app.route("/api/spotlight")
+def api_spotlight() -> Response:
+    """Return a spotlight idea: highest upvotes or most recent active idea."""
+    conn = get_db()
+    row = conn.execute(
+        "SELECT * FROM ideas WHERE archived = 0 ORDER BY COALESCE(upvotes,0) DESC, id DESC LIMIT 1"
+    ).fetchone()
+    conn.close()
+    return jsonify({"idea": dict(row) if row else None})
 
 
 @app.route("/api/ideas")
