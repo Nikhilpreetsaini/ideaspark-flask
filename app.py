@@ -65,6 +65,8 @@ def init_db() -> None:
             notes TEXT NOT NULL,
             tags TEXT,
             mood INTEGER NOT NULL,
+            -- Optional due date for the idea (ISO yyyy-mm-dd).  Allows scheduling and deadline reminders.
+            due_date TEXT,
             upvotes INTEGER DEFAULT 0,
             favourite INTEGER DEFAULT 0,
             archived INTEGER DEFAULT 0,
@@ -99,6 +101,10 @@ def init_db() -> None:
     # Add a status column when upgrading from older schemas
     if "status" not in existing_cols:
         alterations.append("ALTER TABLE ideas ADD COLUMN status TEXT DEFAULT 'Not Started'")
+    # Add a due_date column when upgrading from older schemas
+    if "due_date" not in existing_cols:
+        alterations.append("ALTER TABLE ideas ADD COLUMN due_date TEXT")
+
     for sql in alterations:
         conn.execute(sql)
     conn.commit()
@@ -226,6 +232,7 @@ def home():
     selected_mood = (request.args.get("mood") or "").strip()
     sort_key = (request.args.get("sort") or "date").strip().lower()
     favourite_only = (request.args.get("favourite") or "0").strip() == "1"
+    show_archived = (request.args.get("archived") or "0").strip() == "1"
 
     conn = get_db()
     # Fetch all ideas at once
@@ -242,7 +249,7 @@ def home():
     filtered_ideas = []
     for idea in ideas:
         # Skip archived ideas
-        if idea.get("archived", 0):
+        if idea.get("archived", 0) and not show_archived:
             continue
         # Filter by favourite flag
         if favourite_only and idea.get("favourite", 0) != 1:
@@ -327,6 +334,9 @@ def home():
         badge_label=badge_label,
         stats=stats,
         achievements=achievements,
+        # Expose datetime for due date comparisons in the template
+        datetime=datetime,
+        show_archived=show_archived,
     )
 
 
@@ -337,13 +347,17 @@ def add_idea() -> Response:
     notes = (request.form.get("notes") or "").strip()
     tags_raw = (request.form.get("tags") or "").strip()
     mood = int(request.form.get("mood") or 3)
+    # Due date can be empty or a YYYY‑MM‑DD string.  Leave None if not provided.
+    due_date_raw = (request.form.get("due_date") or "").strip()
+    due_date = due_date_raw if due_date_raw else None
     if not title or not notes:
         return redirect(url_for("home"))
     tags = ",".join([t.strip().lower() for t in tags_raw.split(",") if t.strip()])
     conn = get_db()
+    # Note: specify columns explicitly so that new columns (e.g. due_date) are populated correctly.
     conn.execute(
-        "INSERT INTO ideas(title, notes, tags, mood, upvotes, favourite, archived, created_at) VALUES (?, ?, ?, ?, 0, 0, 0, ?)",
-        (title, notes, tags, mood, datetime.utcnow().isoformat(timespec="seconds")),
+        "INSERT INTO ideas (title, notes, tags, mood, due_date, upvotes, favourite, archived, status, created_at) VALUES (?, ?, ?, ?, ?, 0, 0, 0, 'Not Started', ?)",
+        (title, notes, tags, mood, due_date, datetime.utcnow().isoformat(timespec="seconds")),
     )
     conn.commit()
     conn.close()
@@ -386,6 +400,56 @@ def toggle_favourite(idea_id: int) -> Response:
     return redirect(url_for("home", favourite="1" if new_val else "0"))
 
 
+@app.route("/archive/<int:idea_id>", methods=["POST"])
+def toggle_archive(idea_id: int) -> Response:
+    """Toggle the archived flag for an idea.
+
+    When archived, an idea is hidden from the default listing but still stored
+    in the database.  Users can unarchive it later to bring it back.
+    """
+    conn = get_db()
+    cur = conn.execute("SELECT archived FROM ideas WHERE id = ?", (idea_id,))
+    row = cur.fetchone()
+    if row:
+        new_val = 0 if row[0] else 1
+        conn.execute("UPDATE ideas SET archived = ? WHERE id = ?", (new_val, idea_id))
+        conn.commit()
+    conn.close()
+    return redirect(url_for("home"))
+
+
+@app.route("/duplicate/<int:idea_id>", methods=["POST"])
+def duplicate_idea(idea_id: int) -> Response:
+    """Create a duplicate of an existing idea with '(copy)' appended to the title.
+
+    The new idea copies the title, notes, tags, mood, due_date and status but
+    resets upvotes, favourite and archived flags.  It is stamped with the
+    current timestamp.
+    """
+    conn = get_db()
+    row = conn.execute(
+        "SELECT title, notes, tags, mood, due_date, status FROM ideas WHERE id = ?",
+        (idea_id,),
+    ).fetchone()
+    if row:
+        now = datetime.utcnow().isoformat(timespec="seconds")
+        conn.execute(
+            "INSERT INTO ideas (title, notes, tags, mood, due_date, upvotes, favourite, archived, status, created_at) VALUES (?, ?, ?, ?, ?, 0, 0, 0, ?, ?)",
+            (
+                f"{row['title']} (copy)",
+                row["notes"],
+                row["tags"],
+                row["mood"],
+                row["due_date"],
+                row["status"],
+                now,
+            ),
+        )
+        conn.commit()
+    conn.close()
+    return redirect(url_for("home"))
+
+
 @app.route("/comment/<int:idea_id>", methods=["POST"])
 def add_comment(idea_id: int) -> Response:
     """Add a new comment to an idea."""
@@ -412,6 +476,9 @@ def edit_idea(idea_id: int):
         notes = (request.form.get("notes") or "").strip()
         tags_raw = (request.form.get("tags") or "").strip()
         mood = int(request.form.get("mood") or 3)
+        # Due date may be updated; allow empty string to clear
+        due_date_raw = (request.form.get("due_date") or "").strip()
+        new_due_date = due_date_raw if due_date_raw else None
         # Read status if provided, otherwise keep existing
         new_status = (request.form.get("status") or "").strip()
         allowed_status = {"Not Started", "In Progress", "Completed"}
@@ -422,8 +489,8 @@ def edit_idea(idea_id: int):
             new_status = row[0] if row else "Not Started"
         tags = ",".join([t.strip().lower() for t in tags_raw.split(",") if t.strip()])
         conn.execute(
-            "UPDATE ideas SET title = ?, notes = ?, tags = ?, mood = ?, status = ? WHERE id = ?",
-            (title, notes, tags, mood, new_status, idea_id),
+            "UPDATE ideas SET title = ?, notes = ?, tags = ?, mood = ?, due_date = ?, status = ? WHERE id = ?",
+            (title, notes, tags, mood, new_due_date, new_status, idea_id),
         )
         conn.commit()
         conn.close()
@@ -444,7 +511,19 @@ def export_csv() -> Response:
     conn.close()
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["id", "title", "notes", "tags", "mood", "upvotes", "favourite", "archived", "created_at"])
+    writer.writerow([
+        "id",
+        "title",
+        "notes",
+        "tags",
+        "mood",
+        "due_date",
+        "upvotes",
+        "favourite",
+        "archived",
+        "status",
+        "created_at",
+    ])
     for r in rows:
         writer.writerow([
             r["id"],
@@ -452,9 +531,11 @@ def export_csv() -> Response:
             r["notes"],
             r["tags"],
             r["mood"],
+            r.get("due_date"),
             r.get("upvotes", 0),
             r.get("favourite", 0),
             r.get("archived", 0),
+            r.get("status"),
             r["created_at"],
         ])
     csv_content = output.getvalue()
