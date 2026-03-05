@@ -38,6 +38,19 @@
               <label class="form-label">Mood (1–5)</label>
               <input name="mood" type="number" class="form-control" min="1" max="5" value="{{ idea['mood'] }}" required>
             </div>
+          <div class="mb-3">
+            <label class="form-label">Due date</label>
+            <input name="due_date" type="date" class="form-control" value="{{ idea['due_date'] }}">
+          </div>
+            <div class="mb-3">
+              <label class="form-label">Status</label>
+              <select name="status" class="form-select">
+                {% set status_val = idea.get('status', 'Not Started') %}
+                {% for opt in ['Not Started','In Progress','Completed'] %}
+                  <option value="{{ opt }}" {% if status_val == opt %}selected{% endif %}>{{ opt }}</option>
+                {% endfor %}
+              </select>
+            </div>
             <button class="btn btn-primary">Save</button>
             <a href="/" class="btn btn-outline-secondary ms-2">Cancel</a>
           </form>

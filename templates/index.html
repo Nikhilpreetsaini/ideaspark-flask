@@ -10,14 +10,60 @@
     .moodbar { height: 8px; border-radius: 999px; overflow: hidden; background: rgba(0,0,0,.08); }
     .moodfill { height: 100%; }
     .card-comment { background: #f9fafb; border-radius: .25rem; padding: .5rem .75rem; }
+    /* Dark mode overrides */
+    body.dark-mode { background-color: #121212; color: #e0e0e0; }
+    body.dark-mode .bg-light { background-color: #1e1e1e !important; }
+    body.dark-mode .bg-white { background-color: #1e1e1e !important; }
+    body.dark-mode .navbar { background-color: #1e1e1e; border-color: #333; }
+    body.dark-mode .card { background-color: #1f1f1f; border-color: #333; }
+    body.dark-mode .card-comment { background: #2a2a2a; color: #e0e0e0; }
+    body.dark-mode .chip { border-color: rgba(255,255,255,.3); }
+    body.dark-mode .form-control, body.dark-mode .form-select { background-color: #2a2a2a; color: #e0e0e0; border-color: #444; }
+    body.dark-mode .form-control::placeholder { color: #888; }
+    body.dark-mode .btn-outline-secondary { color: #ddd; border-color: #555; }
+    body.dark-mode .btn-outline-primary { color: #0d6efd; border-color: #0d6efd; }
+    body.dark-mode .btn-outline-warning { color: #ffc107; border-color: #ffc107; }
+    body.dark-mode .btn-outline-danger { color: #dc3545; border-color: #dc3545; }
+    body.dark-mode .btn-outline-info { color: #0dcaf0; border-color: #0dcaf0; }
+    body.dark-mode .btn-outline-secondary:hover, body.dark-mode .btn-outline-primary:hover,
+    body.dark-mode .btn-outline-warning:hover, body.dark-mode .btn-outline-danger:hover,
+    body.dark-mode .btn-outline-info:hover { color: #fff; }
+
+    /* Seasonal themes */
+    body.theme-spring { background-color: #e8f5e9; }
+    body.theme-spring .navbar { background-color: #e8f5e9; }
+    body.theme-spring .card { border-color: #c8e6c9; }
+    body.theme-summer { background-color: #fffde7; }
+    body.theme-summer .navbar { background-color: #fffde7; }
+    body.theme-summer .card { border-color: #ffe082; }
+    body.theme-autumn { background-color: #fff3e0; }
+    body.theme-autumn .navbar { background-color: #fff3e0; }
+    body.theme-autumn .card { border-color: #ffcc80; }
+    body.theme-winter { background-color: #e3f2fd; }
+    body.theme-winter .navbar { background-color: #e3f2fd; }
+    body.theme-winter .card { border-color: #90caf9; }
   </style>
 </head>
 <body class="bg-light">
 
 <nav class="navbar navbar-expand-lg bg-white border-bottom">
-  <div class="container">
+  <div class="container d-flex align-items-center gap-3">
     <span class="navbar-brand fw-bold">{{ app_name }}</span>
-    <span class="text-muted small">Capture, tag and review your ideas.</span>
+    <span class="text-muted small flex-grow-1">Capture, tag and review your ideas.</span>
+    <div class="d-flex align-items-center gap-3 ms-auto">
+      {% if badge_label %}
+        <span class="badge bg-primary">{{ badge_label }}</span>
+      {% endif %}
+      <button id="themeToggle" class="btn btn-sm btn-outline-secondary" title="Toggle dark/light theme">🌙</button>
+      <select id="themeSelect" class="form-select form-select-sm" style="width: auto; min-width: 100px;">
+        <option value="auto">Auto (Season)</option>
+        <option value="default">Default</option>
+        <option value="spring">Spring</option>
+        <option value="summer">Summer</option>
+        <option value="autumn">Autumn</option>
+        <option value="winter">Winter</option>
+      </select>
+    </div>
   </div>
 </nav>
 
@@ -32,11 +78,19 @@
           <form method="post" action="/add" class="vstack gap-2">
             <input name="title" class="form-control" placeholder="Title" required>
             <textarea name="notes" class="form-control" rows="3" placeholder="Notes" required></textarea>
-            <input name="tags" class="form-control" placeholder="Tags (comma separated)">
+            <input name="tags" class="form-control" placeholder="Tags (comma separated)" list="tagSuggestions">
             <label class="form-label mt-1 mb-0">Mood (1=low, 5=high)</label>
             <input name="mood" type="range" class="form-range" min="1" max="5" value="3">
+            <label class="form-label mt-1 mb-0">Due date</label>
+            <input name="due_date" type="date" class="form-control" placeholder="Due date (optional)">
             <button class="btn btn-primary">Save idea</button>
           </form>
+          <!-- Tag suggestions populated from trending tags -->
+          <datalist id="tagSuggestions">
+            {% for tag, count in top_tags %}
+              <option value="{{ tag }}">{{ tag }}</option>
+            {% endfor %}
+          </datalist>
         </div>
       </div>
 
@@ -61,6 +115,10 @@
               <input class="form-check-input" type="checkbox" name="favourite" value="1" id="favOnly" {% if favourite_only %}checked{% endif %}>
               <label class="form-check-label" for="favOnly">Favourites only</label>
             </div>
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="archived" value="1" id="archivedOnly" {% if show_archived %}checked{% endif %}>
+            <label class="form-check-label" for="archivedOnly">Show archived</label>
+          </div>
             <select name="sort" class="form-select">
               <option value="date" {% if sort_key=='date' %}selected{% endif %}>Sort by newest</option>
               <option value="upvotes" {% if sort_key=='upvotes' %}selected{% endif %}>Sort by upvotes</option>
@@ -89,6 +147,28 @@
         </div>
       </div>
 
+      <!-- Stats and Achievements card -->
+      <div class="card shadow-sm mb-3">
+        <div class="card-body">
+          <h6 class="mb-2">Stats &amp; Achievements</h6>
+          <div class="small mb-2">
+            <div><strong>Total Ideas:</strong> {{ stats['ideas'] }}</div>
+            <div><strong>Total Upvotes:</strong> {{ stats['upvotes'] }}</div>
+            <div><strong>Total Comments:</strong> {{ stats['comments'] }}</div>
+            <div><strong>Favourites:</strong> {{ stats['favourites'] }}</div>
+          </div>
+          {% if achievements %}
+            <div class="d-flex flex-wrap gap-1">
+              {% for ach in achievements %}
+                <span class="badge bg-success">{{ ach }}</span>
+              {% endfor %}
+            </div>
+          {% else %}
+            <div class="text-muted small">No achievements yet. Keep going!</div>
+          {% endif %}
+        </div>
+      </div>
+
       <div class="card shadow-sm">
         <div class="card-body">
           <h6 class="mb-2">Export</h6>
@@ -97,42 +177,99 @@
       </div>
     </div>
 
+<!-- Modal for action plan -->
+<div class="modal fade" id="planModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Action Plan</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div id="planContent" class="vstack gap-3"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
     <!-- Right column: chart and ideas list -->
     <div class="col-lg-8">
+      <!-- Grouped row: compact mood chart and Daily Spark -->
+      <div class="row g-3 mb-3">
+        <!-- Compact Mood Chart -->
+        <div class="col-md-7">
+          <div class="card shadow-sm h-100">
+            <div class="card-body">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <h6 class="m-0">Mood distribution</h6>
+                <span class="text-muted small">compact</span>
+              </div>
+              <div style="height: 180px;">
+                <canvas id="moodChart"></canvas>
+              </div>
+            </div>
+          </div>
+        </div>
+        <!-- Daily Spark Card -->
+        <div class="col-md-5">
+          <div class="card shadow-sm h-100">
+            <div class="card-body d-flex flex-column gap-2">
+              <div class="d-flex justify-content-between align-items-center">
+                <h6 class="m-0">🔥 Daily Spark</h6>
+                <div class="form-check form-switch m-0">
+                  <input class="form-check-input" type="checkbox" id="intrigueMode">
+                  <label class="form-check-label small" for="intrigueMode">Intrigue Mode</label>
+                </div>
+              </div>
+              <div class="p-2 rounded bg-light border" id="dailyPromptBox">
+                <span class="text-muted small">Loading prompt…</span>
+              </div>
+              <div class="d-flex gap-2 flex-wrap">
+                <button class="btn btn-sm btn-primary" id="btnNewPrompt">🎲 Roulette Prompt</button>
+                <button class="btn btn-sm btn-outline-secondary" id="btnCopyPrompt">📋 Copy</button>
+                <a class="btn btn-sm btn-outline-primary" href="/export.json">⬇ Export JSON</a>
+              </div>
+              <div class="small text-muted" id="streakLine"></div>
+              <hr class="my-2">
+              <div>
+                <h6 class="m-0">🏆 Spotlight (Top Idea)</h6>
+                <div class="text-muted small" id="spotlightBox">Loading…</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- Challenge Mode card -->
       <div class="card shadow-sm mb-3">
         <div class="card-body">
-          <h6 class="mb-3">Mood distribution</h6>
-          <canvas id="moodChart" height="120"></canvas>
+          <div class="d-flex justify-content-between align-items-center">
+            <h6 class="m-0">🏁 Challenge Mode</h6>
+            <div class="form-check form-switch m-0">
+              <input class="form-check-input" type="checkbox" id="challengeToggle">
+              <label class="form-check-label small" for="challengeToggle">Start</label>
+            </div>
+          </div>
+          <div class="mt-2">
+            <div id="challengeProgress" class="d-flex gap-1"></div>
+            <div class="small text-muted mt-1" id="challengeStatus"></div>
+          </div>
         </div>
       </div>
 
-      <!-- Curiosity Engine card: Daily Spark, Intrigue Mode & Spotlight -->
+      <!-- Timeline chart card -->
       <div class="card shadow-sm mb-3">
-        <div class="card-body d-flex flex-column gap-2">
-          <div class="d-flex justify-content-between align-items-center">
-            <h6 class="m-0">🔥 Daily Spark</h6>
-            <div class="form-check form-switch m-0">
-              <input class="form-check-input" type="checkbox" id="intrigueMode">
-              <label class="form-check-label small" for="intrigueMode">Intrigue Mode</label>
-            </div>
+        <div class="card-body">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <h6 class="m-0">Ideas over last 7 days</h6>
           </div>
-          <div class="p-2 rounded bg-light border" id="dailyPromptBox">
-            <span class="text-muted small">Loading prompt…</span>
-          </div>
-          <div class="d-flex gap-2 flex-wrap">
-            <button class="btn btn-sm btn-primary" id="btnNewPrompt">🎲 Roulette Prompt</button>
-            <button class="btn btn-sm btn-outline-secondary" id="btnCopyPrompt">📋 Copy</button>
-            <a class="btn btn-sm btn-outline-primary" href="/export.json">⬇ Export JSON</a>
-          </div>
-          <div class="small text-muted" id="streakLine"></div>
-          <hr class="my-2">
-          <div>
-            <h6 class="m-0">🏆 Spotlight (Top Idea)</h6>
-            <div class="text-muted small" id="spotlightBox">Loading…</div>
+          <div style="height: 200px;">
+            <canvas id="timelineChart"></canvas>
           </div>
         </div>
       </div>
-      <!-- End curiosity card -->
 
       <div class="d-flex align-items-center justify-content-between mb-2">
         <h5 class="m-0">Your ideas</h5>
@@ -142,7 +279,7 @@
       {% if ideas %}
         <div class="vstack gap-3">
           {% for it in ideas %}
-            <div class="card shadow-sm">
+            <div class="card shadow-sm{% if it['archived'] %} opacity-50{% endif %}">
               <div class="card-body">
                 <div class="d-flex justify-content-between gap-3">
                   <div class="flex-grow-1">
@@ -173,6 +310,18 @@
                       <div class="moodbar mt-1">
                         <div class="moodfill" style="width: {{ it['mood'] * 20 }}%; background: rgba(13,110,253,.75);"></div>
                       </div>
+                      {# Due date display with highlight based on proximity #}
+                      {% if it['due_date'] %}
+                        {% set due_date_obj = datetime.fromisoformat(it['due_date']).date() %}
+                        {% set delta_days = (due_date_obj - datetime.utcnow().date()).days %}
+                        {% if delta_days < 0 %}
+                          <div class="text-danger small mt-1">⚠ Overdue: {{ due_date_obj.strftime('%Y-%m-%d') }}</div>
+                        {% elif delta_days <= 3 %}
+                          <div class="text-warning small mt-1">Due soon: {{ due_date_obj.strftime('%Y-%m-%d') }}</div>
+                        {% else %}
+                          <div class="text-muted small mt-1">Due: {{ due_date_obj.strftime('%Y-%m-%d') }}</div>
+                        {% endif %}
+                      {% endif %}
                     </div>
                     {% set comments = comments_by_idea.get(it['id'], []) %}
                     {% if comments %}
@@ -208,6 +357,31 @@
                         {% if it['favourite'] %}★{% else %}☆{% endif %}
                       </button>
                     </form>
+                    <!-- Archive/Restore button -->
+                    <form method="post" action="/archive/{{ it['id'] }}">
+                      <button class="btn btn-outline-secondary btn-sm" title="{% if it['archived'] %}Restore{% else %}Archive{% endif %}">
+                        🗄
+                      </button>
+                    </form>
+                    <!-- Duplicate button -->
+                    <form method="post" action="/duplicate/{{ it['id'] }}">
+                      <button class="btn btn-outline-secondary btn-sm" title="Duplicate">
+                        ⧉
+                      </button>
+                    </form>
+    <!-- Action Plan button -->
+    <button type="button" class="btn btn-outline-info btn-sm" title="Generate plan" data-plan data-id="{{ it['id'] }}">
+      🧭 Plan
+    </button>
+    <!-- Status selector -->
+    <form method="post" action="/status/{{ it['id'] }}">
+      <select name="status" class="form-select form-select-sm" onchange="this.form.submit()">
+        {% set st = it.get('status', 'Not Started') %}
+        {% for opt in ['Not Started','In Progress','Completed'] %}
+          <option value="{{ opt }}" {% if st == opt %}selected{% endif %}>{{ opt }}</option>
+        {% endfor %}
+      </select>
+    </form>
                     <a href="/edit/{{ it['id'] }}" class="btn btn-outline-secondary btn-sm">Edit</a>
                     <form method="post" action="/delete/{{ it['id'] }}">
                       <button class="btn btn-outline-danger btn-sm">Delete</button>
@@ -228,6 +402,12 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<!-- Bootstrap JS for modals and interactive components -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<!-- Confetti library for celebratory feedback -->
+<script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.5.1/dist/confetti.browser.min.js"></script>
+<!-- Success sound (base64 embedded) -->
+<audio id="successSound" src="data:audio/wav;base64,UklGRqQMAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YYAMAAAAAJZRun0pcB4vc9jukwSBYqj39ztL+XvQc382LOBzmEKAsqL275VEu3kBd6k9BehhnQGAYZ0F6Kk9AXe7eZVE9u+yokKAc5gs4H820HP5eztL9/diqASB7pNz2B4vKXC6fZZRAABqrkaC14/i0I0nEmz8fp5XCQjFtAeEMIyBydQfjWe+f05dChBru0WG/4hXwvsXn2L/f59i+xdXwv+IRYZruwoQTl2+f41n1B+ByTCMB4TFtAkInlf8fhJsjSfi0NePRoJqrgAAllG6fSlwHi9z2O6TBIFiqPf3O0v5e9BzfzYs4HOYQoCyovbvlUS7eQF3qT0F6GGdAYBhnQXoqT0Bd7t5lUT277KiQoBzmCzgfzbQc/l7O0v392KoBIHuk3PYHi8pcLp9llEAAGquRoLXj+LQjScSbPx+nlcJCMW0B4QwjIHJ1B+NZ75/Tl0KEGu7RYb/iFfC+xefYv9/n2L7F1fC/4hFhmu7ChBOXb5/jWfUH4HJMIwHhMW0CQieV/x+EmyNJ+LQ149GgmquAACWUbp9KXAeL3PY7pMEgWKo9/c7S/l70HN/Nizgc5hCgLKi9u+VRLt5AXepPQXoYZ0BgGGdBeipPQF3u3mVRPbvsqJCgHOYLOB/NtBz+Xs7S/f3YqgEge6Tc9geLylwun2WUQAAaq5GgteP4tCNJxJs/H6eVwkIxbQHhDCMgcnUH41nvn9OXQoQa7tFhv+IV8L7F59i/3+fYvsXV8L/iEWGa7sKEE5dvn+NZ9QfgckwjAeExbQJCJ5X/H4SbI0n4tDXj0aCaq4AAJZRun0pcB4vc9jukwSBYqj39ztL+XvQc382LOBzmEKAsqL275VEu3kBd6k9BehhnQGAYZ0F6Kk9AXe7eZVE9u+yokKAc5gs4H820HP5eztL9/diqASB7pNz2B4vKXC6fZZRAABqrkaC14/i0I0nEmz8fp5XCQjFtAeEMIyBydQfjWe+f05dChBru0WG/4hXwvsXn2L/f59i+xdXwv+IRYZruwoQTl2+f41n1B+ByTCMB4TFtAkInlf8fhJsjSfi0NePRoJqrgAAllG6fSlwHi9z2O6TBIFiqPf3O0v5e9BzfzYs4HOYQoCyovbvlUS7eQF3qT0F6GGdAYBhnQXoqT0Bd7t5lUT277KiQoBzmCzgfzbQc/l7O0v392KoBIHuk3PYHi8pcLp9llEAAGquRoLXj+LQjScSbPx+nlcJCMW0B4QwjIHJ1B+NZ75/Tl0KEGu7RYb/iFfC+xefYv9/n2L7F1fC/4hFhmu7ChBOXb5/jWfUH4HJMIwHhMW0CQieV/x+EmyNJ+LQ149GgmquAACWUbp9KXAeL3PY7pMEgWKo9/c7S/l70HN/Nizgc5hCgLKi9u+VRLt5AXepPQXoYZ0BgGGdBeipPQF3u3mVRPbvsqJCgHOYLOB/NtBz+Xs7S/f3YqgEge6Tc9geLylwun2WUQAAaq5GgteP4tCNJxJs/H6eVwkIxbQHhDCMgcnUH41nvn9OXQoQa7tFhv+IV8L7F59i/3+fYvsXV8L/iEWGa7sKEE5dvn+NZ9QfgckwjAeExbQJCJ5X/H4SbI0n4tDXj0aCaq4AAJZRun0pcB4vc9jukwSBYqj39ztL+XvQc382LOBzmEKAsqL275VEu3kBd6k9BehhnQGAYZ0F6Kk9AXe7eZVE9u+yokKAc5gs4H820HP5eztL9/diqASB7pNz2B4vKXC6fZZRAABqrkaC14/i0I0nEmz8fp5XCQjFtAeEMIyBydQfjWe+f05dChBru0WG/4hXwvsXn2L/f59i+xdXwv+IRYZruwoQTl2+f41n1B+ByTCMB4TFtAkInlf8fhJsjSfi0NePRoJqrgAAllG6fSlwHi9z2O6TBIFiqPf3O0v5e9BzfzYs4HOYQoCyovbvlUS7eQF3qT0F6GGdAYBhnQXoqT0Bd7t5lUT277KiQoBzmCzgfzbQc/l7O0v392KoBIHuk3PYHi8pcLp9llEAAGquRoLXj+LQjScSbPx+nlcJCMW0B4QwjIHJ1B+NZ75/Tl0KEGu7RYb/iFfC+xefYv9/n2L7F1fC/4hFhmu7ChBOXb5/jWfUH4HJMIwHhMW0CQieV/x+EmyNJ+LQ149GgmquAACWUbp9KXAeL3PY7pMEgWKo9/c7S/l70HN/Nizgc5hCgLKi9u+VRLt5AXepPQXoYZ0BgGGdBeipPQF3u3mVRPbvsqJCgHOYLOB/NtBz+Xs7S/f3YqgEge6Tc9geLylwun2WUQAAaq5GgteP4tCNJxJs/H6eVwkIxbQHhDCMgcnUH41nvn9OXQoQa7tFhv+IV8L7F59i/3+fYvsXV8L/iEWGa7sKEE5dvn+NZ9QfgckwjAeExbQJCJ5X/H4SbI0n4tDXj0aCaq4AAJZRun0pcB4vc9jukwSBYqj39ztL+XvQc382LOBzmEKAsqL275VEu3kBd6k9BehhnQGAYZ0F6Kk9AXe7eZVE9u+yokKAc5gs4H820HP5eztL9/diqASB7pNz2B4vKXC6fZZRAABqrkaC14/i0I0nEmz8fp5XCQjFtAeEMIyBydQfjWe+f05dChBru0WG/4hXwvsXn2L/f59i+xdXwv+IRYZruwoQTl2+f41n1B+ByTCMB4TFtAkInlf8fhJsjSfi0NePRoJqrgAAllG6fSlwHi9z2O6TBIFiqPf3O0v5e9BzfzYs4HOYQoCyovbvlUS7eQF3qT0F6GGdAYBhnQXoqT0Bd7t5lUT277KiQoBzmCzgfzbQc/l7O0v392KoBIHuk3PYHi8pcLp9llEAAGquRoLXj+LQjScSbPx+nlcJCMW0B4QwjIHJ1B+NZ75/Tl0KEGu7RYb/iFfC+xefYv9/n2L7F1fC/4hFhmu7ChBOXb5/jWfUH4HJMIwHhMW0CQieV/x+EmyNJ+LQ149GgmquAACWUbp9KXAeL3PY7pMEgWKo9/c7S/l70HN/Nizgc5hCgLKi9u+VRLt5AXepPQXoYZ0BgGGdBeipPQF3u3mVRPbvsqJCgHOYLOB/NtBz+Xs7S/f3YqgEge6Tc9geLylwun2WUQAAaq5GgteP4tCNJxJs/H6eVwkIxbQHhDCMgcnUH41nvn9OXQoQa7tFhv+IV8L7F59i/3+fYvsXV8L/iEWGa7sKEE5dvn+NZ9QfgckwjAeExbQJCJ5X/H4SbI0n4tDXj0aCaq4=" preload="auto"></audio>
 <script>
   (function() {
     const moodData = {{ mood_counts_json|safe }};
@@ -396,6 +576,235 @@
       loadDailyPrompt();
       loadSpotlight();
     })();
+  })();
+</script>
+
+<!-- Additional enhancements: Dark mode, Challenge progress, Plan modal and Confetti -->
+<script>
+  (function() {
+    // ---- Dark mode toggle ----
+    const themeBtn = document.getElementById('themeToggle');
+    function applyTheme() {
+      const dark = localStorage.getItem('ideaspark_dark') === '1';
+      document.body.classList.toggle('dark-mode', dark);
+      if (themeBtn) themeBtn.textContent = dark ? '🌞' : '🌙';
+    }
+    if (themeBtn) {
+      applyTheme();
+      themeBtn.addEventListener('click', () => {
+        const current = localStorage.getItem('ideaspark_dark') === '1';
+        localStorage.setItem('ideaspark_dark', current ? '0' : '1');
+        applyTheme();
+      });
+    }
+
+    // ---- Seasonal theme selector ----
+    const themeSelect = document.getElementById('themeSelect');
+    function applySeasonTheme() {
+      let sel = localStorage.getItem('ideaspark_theme') || 'default';
+      // Determine auto season based on current month if auto is selected
+      if (sel === 'auto') {
+        const m = new Date().getMonth(); // 0=Jan
+        if (m >= 2 && m <= 4) sel = 'spring';
+        else if (m >= 5 && m <= 7) sel = 'summer';
+        else if (m >= 8 && m <= 10) sel = 'autumn';
+        else sel = 'winter';
+      }
+      document.body.classList.remove('theme-spring','theme-summer','theme-autumn','theme-winter');
+      if (sel && sel !== 'default') {
+        document.body.classList.add('theme-' + sel);
+      }
+      if (themeSelect) themeSelect.value = localStorage.getItem('ideaspark_theme') || 'default';
+    }
+    // Apply theme on load
+    applySeasonTheme();
+    if (themeSelect) {
+      themeSelect.addEventListener('change', () => {
+        const val = themeSelect.value || 'default';
+        localStorage.setItem('ideaspark_theme', val);
+        applySeasonTheme();
+      });
+    }
+
+    // ---- Challenge progress ----
+    async function getIdeas() {
+      try {
+        const r = await fetch('/api/ideas');
+        return await r.json();
+      } catch {
+        return [];
+      }
+    }
+    async function renderChallengeProgress() {
+      const container = document.getElementById('challengeProgress');
+      const statusEl = document.getElementById('challengeStatus');
+      const start = localStorage.getItem('ideaspark_challenge_start');
+      if (!container || !statusEl) return;
+      container.innerHTML = '';
+      if (!start) {
+        statusEl.textContent = 'Start a 7‑day streak by toggling above.';
+        return;
+      }
+      const startDate = new Date(start);
+      const now = new Date();
+      const ideas = await getIdeas();
+      // group ideas by date
+      const dates = new Set();
+      ideas.forEach(it => {
+        const d = new Date(it.created_at);
+        const iso = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())).toISOString().slice(0,10);
+        dates.add(iso);
+      });
+      let completedDays = 0;
+      for (let i = 0; i < 7; i++) {
+        const day = new Date(startDate);
+        day.setDate(startDate.getDate() + i);
+        const iso = day.toISOString().slice(0,10);
+        const seg = document.createElement('div');
+        seg.style.flex = '1';
+        seg.style.height = '8px';
+        seg.style.borderRadius = '4px';
+        const hasIdea = dates.has(iso);
+        if (hasIdea) completedDays++;
+        seg.style.background = hasIdea ? 'rgba(13,110,253,.75)' : 'rgba(0,0,0,.1)';
+        container.appendChild(seg);
+      }
+      if (completedDays >= 7) {
+        statusEl.textContent = 'Challenge complete! 🎉';
+        // celebrate only once per completion
+        if (!localStorage.getItem('ideaspark_challenge_done')) {
+          if (typeof confetti === 'function') {
+            confetti({ particleCount: 150, spread: 120, origin: { y: 0.3 } });
+          }
+          localStorage.setItem('ideaspark_challenge_done', '1');
+        }
+      } else {
+        statusEl.textContent = `Day ${completedDays + 1} of 7`;
+        localStorage.removeItem('ideaspark_challenge_done');
+      }
+    }
+    const challengeToggle = document.getElementById('challengeToggle');
+    if (challengeToggle) {
+      // initialise toggle state
+      challengeToggle.checked = !!localStorage.getItem('ideaspark_challenge_start');
+      challengeToggle.addEventListener('change', (e) => {
+        if (e.target.checked) {
+          localStorage.setItem('ideaspark_challenge_start', new Date().toISOString());
+        } else {
+          localStorage.removeItem('ideaspark_challenge_start');
+          localStorage.removeItem('ideaspark_challenge_done');
+        }
+        renderChallengeProgress();
+      });
+      // Render progress on load
+      renderChallengeProgress();
+    }
+
+    // ---- Plan modal ----
+    const planModalEl = document.getElementById('planModal');
+    const planModal = planModalEl ? new bootstrap.Modal(planModalEl) : null;
+    document.querySelectorAll('[data-plan]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const id = btn.getAttribute('data-id');
+        try {
+          const r = await fetch(`/api/plan/${id}`);
+          const data = await r.json();
+          const content = document.getElementById('planContent');
+          if (content) {
+            content.innerHTML = '';
+            const heading = document.createElement('h6');
+            heading.textContent = data.title;
+            const overview = document.createElement('p');
+            overview.textContent = data.overview;
+            const audTitle = document.createElement('h6');
+            audTitle.textContent = 'Audience';
+            const audP = document.createElement('p');
+            audP.textContent = data.audience;
+            const stepsTitle = document.createElement('h6');
+            stepsTitle.textContent = 'Steps';
+            const ol = document.createElement('ol');
+            data.steps.forEach(step => {
+              const li = document.createElement('li');
+              li.textContent = step;
+              ol.appendChild(li);
+            });
+            const testTitle = document.createElement('h6');
+            testTitle.textContent = '1‑Day Test';
+            const testP = document.createElement('p');
+            testP.textContent = data.test;
+            content.appendChild(heading);
+            content.appendChild(overview);
+            content.appendChild(audTitle);
+            content.appendChild(audP);
+            content.appendChild(stepsTitle);
+            content.appendChild(ol);
+            content.appendChild(testTitle);
+            content.appendChild(testP);
+          }
+          if (planModal) planModal.show();
+        } catch {
+          alert('Failed to load plan.');
+        }
+      });
+    });
+
+    // ---- Confetti on interactions ----
+    // Add confetti on upvotes and new idea submissions
+    if (typeof confetti === 'function') {
+      document.querySelectorAll('form[action^="/upvote/"]').forEach(f => {
+        f.addEventListener('submit', () => {
+          confetti({ particleCount: 50, spread: 80, origin: { y: 0.2 } });
+          const s = document.getElementById('successSound');
+          if (s) { try { s.currentTime = 0; s.play(); } catch {} }
+        });
+      });
+      const addForm = document.querySelector('form[action="/add"]');
+      if (addForm) {
+        addForm.addEventListener('submit', () => {
+          confetti({ particleCount: 80, spread: 90, origin: { y: 0.2 } });
+          const s = document.getElementById('successSound');
+          if (s) { try { s.currentTime = 0; s.play(); } catch {} }
+        });
+      }
+    }
+
+    // ---- Timeline chart ----
+    async function loadTimeline() {
+      const el = document.getElementById('timelineChart');
+      if (!el) return;
+      try {
+        const r = await fetch('/api/timeline');
+        const data = await r.json();
+        const labels = data.map(it => it.date.slice(5));
+        const values = data.map(it => it.count);
+        const ctx2 = el.getContext('2d');
+        new Chart(ctx2, {
+          type: 'line',
+          data: {
+            labels: labels,
+            datasets: [{
+              label: 'Ideas',
+              data: values,
+              fill: false,
+              borderColor: 'rgba(25,135,84,1)',
+              backgroundColor: 'rgba(25,135,84,0.3)',
+              tension: 0.25
+            }]
+          },
+          options: {
+            scales: {
+              y: { beginAtZero: true, ticks: { precision: 0 } }
+            },
+            responsive: true,
+            maintainAspectRatio: false
+          }
+        });
+      } catch {
+        // ignore errors
+      }
+    }
+    loadTimeline();
+
   })();
 </script>
 </body>
