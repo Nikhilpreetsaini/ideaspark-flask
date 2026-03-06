@@ -37,6 +37,7 @@ from flask import (
     jsonify,
     Response,
 )
+import random
 
 # Application settings
 APP_NAME = "IdeaSpark"
@@ -105,8 +106,31 @@ def init_db() -> None:
     if "due_date" not in existing_cols:
         alterations.append("ALTER TABLE ideas ADD COLUMN due_date TEXT")
 
+    # Add a priority column when upgrading from older schemas.  This allows
+    # users to set the urgency of an idea (Low, Medium, High).  The default
+    # priority is 'Medium'.  Older databases will get this new column via
+    # ALTER TABLE when the app starts.
+    if "priority" not in existing_cols:
+        alterations.append("ALTER TABLE ideas ADD COLUMN priority TEXT DEFAULT 'Medium'")
+
     for sql in alterations:
         conn.execute(sql)
+
+    # Create the tasks table if it does not exist.  Each task is tied to a
+    # parent idea and can be marked complete.  Tasks support simple project
+    # breakdowns and progress tracking for each idea.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS tasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            idea_id INTEGER NOT NULL,
+            text TEXT NOT NULL,
+            completed INTEGER DEFAULT 0,
+            created TEXT DEFAULT (DATETIME('now')),
+            FOREIGN KEY (idea_id) REFERENCES ideas(id) ON DELETE CASCADE
+        )
+        """
+    )
     conn.commit()
     conn.close()
 
@@ -231,6 +255,12 @@ def home():
     selected_tag = (request.args.get("tag") or "").strip().lower()
     selected_mood = (request.args.get("mood") or "").strip()
     sort_key = (request.args.get("sort") or "date").strip().lower()
+    # Filter by priority (Low, Medium, High).  An empty string means no filter.
+    selected_priority = (request.args.get("priority") or "").strip().title()
+    # Determine if the board view is requested.  Use ?view=board to display ideas
+    # grouped by status instead of the standard list.  Any other value falls back
+    # to list view.
+    board_view = (request.args.get("view") or "").strip().lower() == "board"
     # Optional filter: only show ideas due within the next 7 days
     due_filter = (request.args.get("due") or "").strip().lower()
     favourite_only = (request.args.get("favourite") or "0").strip() == "1"
@@ -239,6 +269,19 @@ def home():
     conn = get_db()
     # Fetch all ideas at once
     ideas = [dict(row) for row in conn.execute("SELECT * FROM ideas").fetchall()]
+
+    # Fetch all tasks and group them by idea for easy lookup.  This allows us
+    # to display checklists and compute progress bars in the UI.  We'll also
+    # build a progress dictionary with counts of completed vs total tasks.
+    tasks_by_idea: dict[int, list[sqlite3.Row]] = defaultdict(list)
+    progress_by_idea: dict[int, tuple[int, int]] = {}
+    for t in conn.execute("SELECT * FROM tasks ORDER BY id ASC").fetchall():
+        tid = t["idea_id"]
+        tasks_by_idea[tid].append(dict(t))
+    for idea_id, tasks in tasks_by_idea.items():
+        total = len(tasks)
+        completed = sum(1 for t in tasks if t.get("completed", 0))
+        progress_by_idea[idea_id] = (completed, total)
 
     # Fetch comments and group them by idea ID
     comments_by_idea: dict[int, list[sqlite3.Row]] = defaultdict(list)
@@ -257,6 +300,10 @@ def home():
         # Filter by favourite flag
         if favourite_only and idea.get("favourite", 0) != 1:
             continue
+        # Filter by priority
+        if selected_priority:
+            if idea.get("priority", "").title() != selected_priority:
+                continue
         # Filter by tag
         if selected_tag:
             tag_list = [t.strip().lower() for t in (idea.get("tags") or "").split(",") if t.strip()]
@@ -298,6 +345,9 @@ def home():
     elif sort_key == "status":
         order = {"Not Started": 0, "In Progress": 1, "Completed": 2}
         filtered_ideas.sort(key=lambda x: (order.get(x.get("status"), 0), x["id"]))
+    elif sort_key == "priority":
+        order = {"High": 0, "Medium": 1, "Low": 2}
+        filtered_ideas.sort(key=lambda x: (order.get(x.get("priority", "Medium"), 1), x["id"]))
     else:  # date (default)
         filtered_ideas.sort(key=lambda x: x.get("id"), reverse=True)
 
@@ -321,6 +371,43 @@ def home():
     # Convert mood counts to JSON for Chart.js
     mood_counts_json = json.dumps(mood_counts)
 
+    # Compute a bar chart for the most common tags.  We'll keep the top
+    # five tags and their counts to visualize tag usage across all ideas.
+    tag_counts_list = sorted(tag_counts.items(), key=lambda kv: kv[1], reverse=True)[:5]
+
+    # Compute simple word frequency across titles and notes to provide
+    # search suggestions.  Remove very short or common stopwords to keep
+    # suggestions meaningful.  You can expand the stopwords list as needed.
+    stopwords = {
+        "the", "and", "for", "with", "that", "this", "there", "their", "have", "has", "are",
+        "you", "your", "what", "which", "when", "where", "how", "why", "from", "into", "each",
+        "will", "would", "could", "should", "can", "all", "not", "but", "out", "our", "about",
+        "idea", "ideas", "notes", "title", "build", "make", "just",
+    }
+    word_freq: Counter[str] = Counter()
+    for idea in ideas:
+        text = f"{idea.get('title', '')} {idea.get('notes', '')}"
+        # Replace non‑letters with space and split
+        words = [w.lower() for w in ''.join(ch if ch.isalnum() else ' ' for ch in text).split()]
+        for w in words:
+            if len(w) < 3 or w in stopwords:
+                continue
+            word_freq[w] += 1
+    top_words = [w for w, _ in word_freq.most_common(10)]
+
+    # Count ideas that are due within the next two days (overdue items are also shown).
+    due_soon_count = 0
+    for idea in ideas:
+        due = idea.get("due_date")
+        if not due:
+            continue
+        try:
+            due_dt = datetime.fromisoformat(due).date()
+        except Exception:
+            continue
+        if due_dt <= today_date + timedelta(days=2):
+            due_soon_count += 1
+
     # Determine badge based on the number of ideas shown
     badge_label = badge_for_count(len(filtered_ideas))
 
@@ -343,21 +430,27 @@ def home():
         app_name=APP_NAME,
         ideas=filtered_ideas,
         comments_by_idea=comments_by_idea,
+        tasks_by_idea=tasks_by_idea,
+        progress_by_idea=progress_by_idea,
         search_query=search_query,
         selected_tag=selected_tag,
         selected_mood=selected_mood,
+        selected_priority=selected_priority,
         sort_key=sort_key,
         favourite_only=favourite_only,
         all_tags=all_tags,
         top_tags=top_tags,
+        tag_counts_list=tag_counts_list,
         mood_counts_json=mood_counts_json,
         badge_label=badge_label,
         stats=stats,
         achievements=achievements,
-        # Expose datetime for due date comparisons in the template
         datetime=datetime,
         show_archived=show_archived,
         due_filter=due_filter,
+        board_view=board_view,
+        top_words=top_words,
+        due_soon_count=due_soon_count,
     )
 
 
@@ -368,6 +461,10 @@ def add_idea() -> Response:
     notes = (request.form.get("notes") or "").strip()
     tags_raw = (request.form.get("tags") or "").strip()
     mood = int(request.form.get("mood") or 3)
+    # Priority value: Low, Medium or High (default is Medium)
+    priority = (request.form.get("priority") or "Medium").strip().title()
+    if priority not in {"Low", "Medium", "High"}:
+        priority = "Medium"
     # Due date can be empty or a YYYY‑MM‑DD string.  Leave None if not provided.
     due_date_raw = (request.form.get("due_date") or "").strip()
     due_date = due_date_raw if due_date_raw else None
@@ -377,8 +474,8 @@ def add_idea() -> Response:
     conn = get_db()
     # Note: specify columns explicitly so that new columns (e.g. due_date) are populated correctly.
     conn.execute(
-        "INSERT INTO ideas (title, notes, tags, mood, due_date, upvotes, favourite, archived, status, created_at) VALUES (?, ?, ?, ?, ?, 0, 0, 0, 'Not Started', ?)",
-        (title, notes, tags, mood, due_date, datetime.utcnow().isoformat(timespec="seconds")),
+        "INSERT INTO ideas (title, notes, tags, mood, due_date, upvotes, favourite, archived, status, priority, created_at) VALUES (?, ?, ?, ?, ?, 0, 0, 0, 'Not Started', ?, ?)",
+        (title, notes, tags, mood, due_date, priority, datetime.utcnow().isoformat(timespec="seconds")),
     )
     conn.commit()
     conn.close()
@@ -508,10 +605,17 @@ def edit_idea(idea_id: int):
             cur = conn.execute("SELECT status FROM ideas WHERE id = ?", (idea_id,))
             row = cur.fetchone()
             new_status = row[0] if row else "Not Started"
+        # Read priority if provided, otherwise keep existing
+        new_priority = (request.form.get("priority") or "").strip().title()
+        allowed_priorities = {"Low", "Medium", "High"}
+        if new_priority not in allowed_priorities:
+            cur = conn.execute("SELECT priority FROM ideas WHERE id = ?", (idea_id,))
+            r = cur.fetchone()
+            new_priority = r[0] if r else "Medium"
         tags = ",".join([t.strip().lower() for t in tags_raw.split(",") if t.strip()])
         conn.execute(
-            "UPDATE ideas SET title = ?, notes = ?, tags = ?, mood = ?, due_date = ?, status = ? WHERE id = ?",
-            (title, notes, tags, mood, new_due_date, new_status, idea_id),
+            "UPDATE ideas SET title = ?, notes = ?, tags = ?, mood = ?, due_date = ?, status = ?, priority = ? WHERE id = ?",
+            (title, notes, tags, mood, new_due_date, new_status, new_priority, idea_id),
         )
         conn.commit()
         conn.close()
@@ -597,6 +701,107 @@ def api_spotlight() -> Response:
     ).fetchone()
     conn.close()
     return jsonify({"idea": dict(row) if row else None})
+
+# ---------------------------------------------------------------------------
+# Additional data APIs
+
+@app.route("/api/top_ideas")
+def api_top_ideas() -> Response:
+    """Return a list of the top ideas ranked by engagement.
+
+    Each entry contains id, title, upvote count, comment count, favourite flag
+    and completion ratio.  The list is sorted by a weighted score combining
+    upvotes, favourites, comments and task completion.  Only non‑archived
+    ideas are considered.  The top 5 results are returned.
+    """
+    conn = get_db()
+    # Fetch active ideas
+    ideas = [dict(row) for row in conn.execute("SELECT * FROM ideas WHERE archived = 0").fetchall()]
+    # Comment counts per idea
+    comment_counts: Counter[int] = Counter()
+    for row in conn.execute("SELECT idea_id FROM comments").fetchall():
+        comment_counts[row[0]] += 1
+    # Task completion per idea: completed, total
+    tasks_by: dict[int, list[int]] = defaultdict(lambda: [0, 0])
+    for row in conn.execute("SELECT idea_id, completed FROM tasks").fetchall():
+        idea_id, completed = row
+        tasks_by[idea_id][1] += 1
+        if completed:
+            tasks_by[idea_id][0] += 1
+    conn.close()
+    ranked: list[tuple[float, dict]] = []
+    for it in ideas:
+        completed, total = tasks_by.get(it["id"], [0, 0])
+        completion = (completed / total) if total > 0 else 0.0
+        comments = comment_counts.get(it["id"], 0)
+        upvotes = int(it.get("upvotes", 0) or 0)
+        fav = int(it.get("favourite", 0) or 0)
+        # Weighted score: upvotes*2 + favourites*1 + comments*1 + completion
+        score = upvotes * 2 + fav * 1 + comments * 1 + completion
+        ranked.append((score, {
+            "id": it["id"],
+            "title": it["title"],
+            "upvotes": upvotes,
+            "comments": comments,
+            "favourites": fav,
+            "completion": completion,
+        }))
+    # Sort by score descending then id descending
+    ranked.sort(key=lambda x: (x[0], x[1]["id"]), reverse=True)
+    top = [entry for _, entry in ranked[:5]]
+    return jsonify(top)
+
+
+@app.route("/api/random_mashup")
+def api_random_mashup() -> Response:
+    """Return a random mashup of two ideas.
+
+    Two random active ideas are selected and merged to form a new idea.  The
+    title is built by combining parts of each title, the notes are joined
+    with a separator, tags are merged and deduplicated, the mood is the
+    rounded average of the two moods, and the due date is carried over
+    from whichever idea has a due date (preferring the first).  Priority
+    defaults to Medium.  If fewer than two active ideas exist, an error
+    is returned.
+    """
+    conn = get_db()
+    ideas = [dict(row) for row in conn.execute("SELECT * FROM ideas WHERE archived = 0").fetchall()]
+    conn.close()
+    if len(ideas) < 2:
+        return jsonify({"error": "Not enough ideas to mashup"}), 400
+    a, b = random.sample(ideas, 2)
+    # Split titles into words
+    words_a = a.get("title", "").split()
+    words_b = b.get("title", "").split()
+    half_a = words_a[: max(1, len(words_a) // 2)]
+    half_b = words_b[len(words_b) // 2 :]
+    new_title = " ".join(half_a + half_b)
+    if not new_title.strip():
+        new_title = f"{a.get('title', '')} & {b.get('title', '')}"
+    # Combine notes with separator
+    notes_a = a.get("notes", "")
+    notes_b = b.get("notes", "")
+    new_notes = (notes_a + "\n\n---\n\n" + notes_b).strip()
+    # Merge tags and deduplicate
+    tags_a = [t.strip() for t in (a.get("tags") or "").split(",") if t.strip()]
+    tags_b = [t.strip() for t in (b.get("tags") or "").split(",") if t.strip()]
+    tags_merged = sorted(set(tags_a + tags_b))
+    # Average mood
+    try:
+        mood_avg = round((int(a.get("mood", 3)) + int(b.get("mood", 3))) / 2)
+    except Exception:
+        mood_avg = 3
+    # Choose due date (prefer due date of first idea, fallback to second)
+    due_date = a.get("due_date") or b.get("due_date")
+    result = {
+        "title": new_title,
+        "notes": new_notes,
+        "tags": ", ".join(tags_merged),
+        "mood": mood_avg,
+        "due_date": due_date,
+        "priority": "Medium",
+    }
+    return jsonify(result)
 
 @app.route("/export.md")
 def export_markdown() -> Response:
@@ -804,6 +1009,61 @@ def update_status(idea_id: int) -> Response:
     conn.commit()
     conn.close()
     return redirect(url_for("home"))
+
+
+# ---------------------------------------------------------------------------
+# Task management routes
+#
+# Tasks allow users to break an idea into smaller actionable items.  Users can
+# add tasks, mark them complete or delete them.  Progress is displayed on
+# each idea card as a progress bar.
+
+@app.route("/task/add/<int:idea_id>", methods=["POST"])
+def add_task(idea_id: int) -> Response:
+    """Add a new task to the specified idea."""
+    text = (request.form.get("task") or "").strip()
+    if not text:
+        return redirect(request.referrer or url_for("home"))
+    conn = get_db()
+    # Ensure the idea exists
+    r = conn.execute("SELECT id FROM ideas WHERE id = ?", (idea_id,)).fetchone()
+    if not r:
+        conn.close()
+        return redirect(url_for("home"))
+    conn.execute(
+        "INSERT INTO tasks (idea_id, text, completed, created) VALUES (?, ?, 0, ?)",
+        (idea_id, text, datetime.utcnow().isoformat(timespec="seconds")),
+    )
+    conn.commit()
+    conn.close()
+    return redirect(request.referrer or url_for("home"))
+
+
+@app.route("/task/complete/<int:task_id>", methods=["POST"])
+def toggle_task(task_id: int) -> Response:
+    """Toggle the completion state of a task."""
+    conn = get_db()
+    # Fetch current state and idea ID for redirection after update
+    cur = conn.execute("SELECT completed, idea_id FROM tasks WHERE id = ?", (task_id,))
+    row = cur.fetchone()
+    if not row:
+        conn.close()
+        return redirect(url_for("home"))
+    new_val = 0 if row[0] else 1
+    conn.execute("UPDATE tasks SET completed = ? WHERE id = ?", (new_val, task_id))
+    conn.commit()
+    conn.close()
+    return redirect(request.referrer or url_for("home"))
+
+
+@app.route("/task/delete/<int:task_id>", methods=["POST"])
+def delete_task(task_id: int) -> Response:
+    """Delete a task."""
+    conn = get_db()
+    conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+    conn.commit()
+    conn.close()
+    return redirect(request.referrer or url_for("home"))
 
 
 if __name__ == "__main__":
