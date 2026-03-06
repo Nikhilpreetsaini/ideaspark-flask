@@ -51,6 +51,15 @@
                 {% endfor %}
               </select>
             </div>
+            <div class="mb-3">
+              <label class="form-label">Priority</label>
+              {% set pr = idea.get('priority', 'Medium') %}
+              <select name="priority" class="form-select">
+                <option value="High" {% if pr == 'High' %}selected{% endif %}>High</option>
+                <option value="Medium" {% if pr == 'Medium' %}selected{% endif %}>Medium</option>
+                <option value="Low" {% if pr == 'Low' %}selected{% endif %}>Low</option>
+              </select>
+            </div>
             <button class="btn btn-primary">Save</button>
             <a href="/" class="btn btn-outline-secondary ms-2">Cancel</a>
           </form>
