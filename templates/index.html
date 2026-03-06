@@ -10,6 +10,17 @@
     .moodbar { height: 8px; border-radius: 999px; overflow: hidden; background: rgba(0,0,0,.08); }
     .moodfill { height: 100%; }
     .card-comment { background: #f9fafb; border-radius: .25rem; padding: .5rem .75rem; }
+
+    /* Status badges show the current state of an idea at a glance.
+       Each status has its own colour so you can see progress quickly.
+       Use the generic status-badge class along with a modifier. */
+    .status-badge { display: inline-block; padding: .15rem .5rem; border-radius: .25rem; font-size: .75rem; font-weight: 600; }
+    .status-not-started { background-color: #6c757d; color: #fff; }
+    .status-in-progress { background-color: #0d6efd; color: #fff; }
+    .status-completed { background-color: #198754; color: #fff; }
+
+    /* Tag cloud styling ensures tags wrap naturally and have no underline.  Font size will be controlled inline. */
+    .tag-cloud a { text-decoration: none; margin: 0 .25rem; line-height: 1.4; }
     /* Dark mode overrides */
     body.dark-mode { background-color: #121212; color: #e0e0e0; }
     body.dark-mode .bg-light { background-color: #1e1e1e !important; }
@@ -63,6 +74,8 @@
         <option value="autumn">Autumn</option>
         <option value="winter">Winter</option>
       </select>
+      <!-- Accent colour picker: allow users to customise the primary colour.  Stored in localStorage and applied via CSS variables. -->
+      <input type="color" id="accentColorPicker" class="form-control form-control-color form-control-sm" style="width: 2.2rem; padding:0; border: none;" title="Pick accent colour">
     </div>
   </div>
 </nav>
@@ -90,7 +103,11 @@
               <option value="Medium" selected>Medium</option>
               <option value="Low">Low</option>
             </select>
-            <button class="btn btn-primary">Save idea</button>
+            <div class="d-flex gap-2">
+              <button class="btn btn-primary">Save idea</button>
+              <!-- Mashup button populates the form with a randomly combined idea -->
+              <button type="button" class="btn btn-outline-secondary" id="btnMashup">Mashup</button>
+            </div>
           </form>
           <!-- Tag suggestions populated from trending tags -->
           <datalist id="tagSuggestions">
@@ -195,6 +212,51 @@
           {% else %}
             <div class="text-muted small">No achievements yet. Keep going!</div>
           {% endif %}
+        </div>
+      </div>
+
+      <!-- Top Ideas scoreboard & Notifications -->
+      <div class="card shadow-sm mb-3">
+        <div class="card-body">
+          <h6 class="mb-2">🏅 Top Ideas</h6>
+          <div id="topIdeasList" class="vstack gap-2 small">
+            <div class="text-muted">Loading…</div>
+          </div>
+          <div class="form-check form-switch mt-2">
+            <input class="form-check-input" type="checkbox" id="notifToggle">
+            <label class="form-check-label small" for="notifToggle">Enable notifications</label>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tag Cloud card -->
+      <div class="card shadow-sm mb-3">
+        <div class="card-body">
+          <h6 class="mb-2">🌥 Tag Cloud</h6>
+          {% if tag_cloud %}
+            <div class="tag-cloud">
+              {% for tag, count in tag_cloud %}
+                <a href="/?tag={{ tag }}" style="font-size: {{ (0.7 + (count / max_tag_count) * 1.5)|round(2) }}rem;" class="text-primary">{{ tag }}</a>
+              {% endfor %}
+            </div>
+          {% else %}
+            <div class="text-muted small">No tags yet.</div>
+          {% endif %}
+        </div>
+      </div>
+
+      <!-- Focus Timer -->
+      <div class="card shadow-sm mb-3">
+        <div class="card-body">
+          <h6 class="mb-2">⏱ Focus Timer</h6>
+          <div class="d-flex align-items-center gap-2">
+            <span id="timerDisplay" class="fs-5 fw-semibold">25:00</span>
+            <div class="btn-group btn-group-sm" role="group">
+              <button type="button" class="btn btn-outline-success" id="timerStart">Start</button>
+              <button type="button" class="btn btn-outline-warning" id="timerPause">Pause</button>
+              <button type="button" class="btn btn-outline-danger" id="timerReset">Reset</button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -487,8 +549,10 @@
                         {% if it['favourite'] %}
                           <span class="text-warning" title="Favourite">★</span>
                         {% endif %}
-                        <!-- Priority badge -->
+                        <!-- Priority badge and status badge -->
                         <span class="badge {% if it['priority']=='High' %}bg-danger{% elif it['priority']=='Low' %}bg-secondary{% else %}bg-warning text-dark{% endif %}" title="Priority">{{ it['priority'] }}</span>
+                        <!-- Status badge shows current progress stage.  The class maps to the CSS defined above. -->
+                        <span class="status-badge status-{{ it['status'].replace(' ', '-').lower() }}" title="Status">{{ it['status'] }}</span>
                       </div>
                       <div class="text-muted small mt-1">Saved: {{ it['created_at'] }} UTC</div>
                       <p class="mt-3 mb-2">{{ it['notes'] }}</p>
@@ -1135,8 +1199,196 @@
         });
       }
     };
-
   })();
+</script>
+
+<!-- Additional user experience enhancements: accent colour picker, top ideas, notifications, focus timer and mashup support -->
+<script>
+(function() {
+  // ---- Accent colour picker ----
+  const colorPicker = document.getElementById('accentColorPicker');
+  function applyAccent() {
+    const c = localStorage.getItem('ideaspark_accent_color') || '#0d6efd';
+    document.documentElement.style.setProperty('--bs-primary', c);
+    if (colorPicker) colorPicker.value = c;
+  }
+  applyAccent();
+  if (colorPicker) {
+    colorPicker.addEventListener('input', (e) => {
+      const val = e.target.value || '#0d6efd';
+      localStorage.setItem('ideaspark_accent_color', val);
+      applyAccent();
+    });
+  }
+
+  // ---- Top Ideas scoreboard ----
+  async function loadTopIdeas() {
+    const container = document.getElementById('topIdeasList');
+    if (!container) return;
+    try {
+      const r = await fetch('/api/top_ideas');
+      const data = await r.json();
+      if (!data || data.length === 0) {
+        container.innerHTML = '<div class="text-muted">No ideas yet.</div>';
+        return;
+      }
+      container.innerHTML = '';
+      data.forEach((it, idx) => {
+        const div = document.createElement('div');
+        div.innerHTML = `<span class="fw-semibold">${idx + 1}. ${it.title}</span> <span class="text-muted">👍 ${it.upvotes} · 💬 ${it.comments} · ★ ${it.favourites}</span>`;
+        container.appendChild(div);
+      });
+    } catch {
+      container.innerHTML = '<div class="text-muted">Failed to load.</div>';
+    }
+  }
+  loadTopIdeas();
+
+  // ---- Notifications toggle ----
+  const notifToggle = document.getElementById('notifToggle');
+  function applyNotif() {
+    const on = localStorage.getItem('ideaspark_notifications') === '1';
+    if (notifToggle) notifToggle.checked = on;
+  }
+  applyNotif();
+  if (notifToggle) {
+    notifToggle.addEventListener('change', () => {
+      const on = notifToggle.checked;
+      localStorage.setItem('ideaspark_notifications', on ? '1' : '0');
+      if (on && 'Notification' in window && Notification.permission !== 'granted') {
+        Notification.requestPermission();
+      }
+    });
+  }
+
+  // ---- Due soon desktop notifications ----
+  (async function() {
+    try {
+      const count = {{ due_soon_count }};
+      if (count > 0 && localStorage.getItem('ideaspark_notifications') === '1' && 'Notification' in window && Notification.permission === 'granted') {
+        const msg = count === 1 ? 'You have 1 idea due soon!' : `You have ${count} ideas due soon!`;
+        new Notification(msg);
+      }
+    } catch {}
+  })();
+
+  // ---- Focus Timer ----
+  (function() {
+    const display = document.getElementById('timerDisplay');
+    const startBtn = document.getElementById('timerStart');
+    const pauseBtn = document.getElementById('timerPause');
+    const resetBtn = document.getElementById('timerReset');
+    let duration = 25 * 60;
+    let remaining = duration;
+    let interval = null;
+    function updateDisplay() {
+      if (!display) return;
+      const m = Math.floor(remaining / 60).toString().padStart(2, '0');
+      const s = Math.floor(remaining % 60).toString().padStart(2, '0');
+      display.textContent = m + ':' + s;
+    }
+    updateDisplay();
+    function tick() {
+      if (remaining > 0) {
+        remaining--;
+        updateDisplay();
+        if (remaining === 0) {
+          clearInterval(interval);
+          interval = null;
+          const s = document.getElementById('successSound');
+          if (s) {
+            try {
+              s.currentTime = 0;
+              s.play();
+            } catch {}
+          }
+          if (typeof confetti === 'function') {
+            confetti({ particleCount: 100, spread: 100, origin: { y: 0.3 } });
+          }
+          if (localStorage.getItem('ideaspark_notifications') === '1' && 'Notification' in window && Notification.permission === 'granted') {
+            new Notification('Focus session complete! Time for a break.');
+          }
+        }
+      }
+    }
+    if (startBtn) startBtn.addEventListener('click', () => {
+      if (!interval) {
+        interval = setInterval(tick, 1000);
+      }
+    });
+    if (pauseBtn) pauseBtn.addEventListener('click', () => {
+      if (interval) {
+        clearInterval(interval);
+        interval = null;
+      }
+    });
+    if (resetBtn) resetBtn.addEventListener('click', () => {
+      if (interval) {
+        clearInterval(interval);
+        interval = null;
+      }
+      remaining = duration;
+      updateDisplay();
+    });
+  })();
+
+  // ---- Mashup button ----
+  (function() {
+    const btn = document.getElementById('btnMashup');
+    if (!btn) return;
+    btn.addEventListener('click', async () => {
+      try {
+        const r = await fetch('/api/random_mashup');
+        const data = await r.json();
+        if (data.error) {
+          alert(data.error);
+          return;
+        }
+        const titleInput = document.querySelector('input[name="title"]');
+        const notesInput = document.querySelector('textarea[name="notes"]');
+        const tagsInput = document.querySelector('input[name="tags"]');
+        const moodInput = document.querySelector('input[name="mood"]');
+        const dueInput = document.querySelector('input[name="due_date"]');
+        const prioritySelect = document.querySelector('select[name="priority"]');
+        if (titleInput) titleInput.value = data.title || '';
+        if (notesInput) notesInput.value = data.notes || '';
+        if (tagsInput) tagsInput.value = data.tags || '';
+        if (moodInput && data.mood) moodInput.value = data.mood;
+        if (dueInput) dueInput.value = data.due_date || '';
+        if (prioritySelect) prioritySelect.value = data.priority || 'Medium';
+        const msg = '🎲 Mashup generated! Edit and save if you like it.';
+        const el = document.createElement('div');
+        el.className = 'position-fixed bottom-0 end-0 p-3';
+        el.style.zIndex = 9999;
+        el.innerHTML = `<div class="toast show shadow"><div class="toast-body">${msg}</div></div>`;
+        document.body.appendChild(el);
+        setTimeout(() => el.remove(), 2000);
+      } catch (err) {
+        alert('Failed to generate mashup.');
+      }
+    });
+  })();
+})();
+</script>
+
+<!-- Highlight search query matches in titles, notes and comments.  Wraps matched text in <mark> tags after the page loads. -->
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const term = '{{ search_query|escape }}'.trim().toLowerCase();
+    if (!term) return;
+    // Escape regex special characters
+    const esc = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp('(' + esc + ')', 'gi');
+    document.querySelectorAll('[data-idea-id]').forEach(card => {
+      ['h5', 'p', '.card-comment div'].forEach(sel => {
+        card.querySelectorAll(sel).forEach(el => {
+          const html = el.innerHTML;
+          // Avoid replacing inside HTML tags
+          el.innerHTML = html.replace(regex, '<mark>$1</mark>');
+        });
+      });
+    });
+  });
 </script>
 </body>
 </html>
