@@ -375,6 +375,14 @@ def home():
     # five tags and their counts to visualize tag usage across all ideas.
     tag_counts_list = sorted(tag_counts.items(), key=lambda kv: kv[1], reverse=True)[:5]
 
+    # Compute a tag cloud from all tags.  The cloud uses the entire
+    # tag_counts mapping and assigns a relative size to each tag based
+    # on its frequency.  The template will scale font sizes using
+    # max_tag_count below.  If no tags exist, default max_tag_count to 1
+    # to avoid division by zero.
+    tag_cloud = list(tag_counts.items())
+    max_tag_count = max(tag_counts.values()) if tag_counts else 1
+
     # Compute simple word frequency across titles and notes to provide
     # search suggestions.  Remove very short or common stopwords to keep
     # suggestions meaningful.  You can expand the stopwords list as needed.
@@ -441,6 +449,8 @@ def home():
         all_tags=all_tags,
         top_tags=top_tags,
         tag_counts_list=tag_counts_list,
+        tag_cloud=tag_cloud,
+        max_tag_count=max_tag_count,
         mood_counts_json=mood_counts_json,
         badge_label=badge_label,
         stats=stats,
