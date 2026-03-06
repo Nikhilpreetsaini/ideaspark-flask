@@ -231,6 +231,8 @@ def home():
     selected_tag = (request.args.get("tag") or "").strip().lower()
     selected_mood = (request.args.get("mood") or "").strip()
     sort_key = (request.args.get("sort") or "date").strip().lower()
+    # Optional filter: only show ideas due within the next 7 days
+    due_filter = (request.args.get("due") or "").strip().lower()
     favourite_only = (request.args.get("favourite") or "0").strip() == "1"
     show_archived = (request.args.get("archived") or "0").strip() == "1"
 
@@ -247,6 +249,7 @@ def home():
 
     # Apply filters in Python for flexibility
     filtered_ideas = []
+    today_date = datetime.utcnow().date()
     for idea in ideas:
         # Skip archived ideas
         if idea.get("archived", 0) and not show_archived:
@@ -267,6 +270,17 @@ def home():
         if search_query:
             if search_query not in idea.get("title", "").lower() and search_query not in idea.get("notes", "").lower():
                 continue
+        # Due soon filter
+        if due_filter == "soon":
+            due = idea.get("due_date")
+            if not due:
+                continue
+            try:
+                due_dt = datetime.fromisoformat(due).date()
+            except Exception:
+                continue
+            if not (today_date <= due_dt <= today_date + timedelta(days=7)):
+                continue
         filtered_ideas.append(idea)
 
     # Sorting
@@ -278,6 +292,12 @@ def home():
         filtered_ideas.sort(key=lambda x: (x.get("mood", 0), x["id"]), reverse=True)
     elif sort_key == "favourite":
         filtered_ideas.sort(key=lambda x: (x.get("favourite", 0), x["id"]), reverse=True)
+    elif sort_key == "due":
+        # Sort by due date ascending; None dates go last
+        filtered_ideas.sort(key=lambda x: ((x.get("due_date") or "9999-12-31"), x["id"]))
+    elif sort_key == "status":
+        order = {"Not Started": 0, "In Progress": 1, "Completed": 2}
+        filtered_ideas.sort(key=lambda x: (order.get(x.get("status"), 0), x["id"]))
     else:  # date (default)
         filtered_ideas.sort(key=lambda x: x.get("id"), reverse=True)
 
@@ -337,6 +357,7 @@ def home():
         # Expose datetime for due date comparisons in the template
         datetime=datetime,
         show_archived=show_archived,
+        due_filter=due_filter,
     )
 
 
@@ -576,6 +597,84 @@ def api_spotlight() -> Response:
     ).fetchone()
     conn.close()
     return jsonify({"idea": dict(row) if row else None})
+
+@app.route("/export.md")
+def export_markdown() -> Response:
+    """Export all ideas to a Markdown file with comments."""
+    conn = get_db()
+    ideas = conn.execute("SELECT * FROM ideas ORDER BY id ASC").fetchall()
+    # Load all comments and group by idea
+    comments_by: dict[int, list] = defaultdict(list)
+    for c in conn.execute("SELECT * FROM comments ORDER BY id ASC").fetchall():
+        comments_by[c["idea_id"]].append(dict(c))
+    conn.close()
+    lines: list[str] = []
+    for row in ideas:
+        r = dict(row)
+        lines.append(f"## Idea {r['id']}: {r['title']}")
+        lines.append("")
+        lines.append(f"- **Notes:** {r['notes']}")
+        if r.get('tags'):
+            lines.append(f"- **Tags:** {r['tags']}")
+        lines.append(f"- **Mood:** {r['mood']}/5")
+        lines.append(f"- **Due Date:** {r.get('due_date') or 'N/A'}")
+        lines.append(f"- **Status:** {r.get('status')}")
+        lines.append(f"- **Upvotes:** {r.get('upvotes', 0)}")
+        lines.append(f"- **Favourite:** {'Yes' if r.get('favourite') else 'No'}")
+        lines.append(f"- **Archived:** {'Yes' if r.get('archived') else 'No'}")
+        lines.append(f"- **Created At:** {r['created_at']}")
+        # Comments
+        if comments_by.get(r['id']):
+            lines.append("- **Comments:**")
+            for c in comments_by[r['id']]:
+                lines.append(f"  - ({c['created_at']}) {c['content']}")
+        lines.append("")
+    payload = "\n".join(lines)
+    return Response(
+        payload,
+        mimetype="text/markdown",
+        headers={"Content-Disposition": "attachment; filename=ideas.md"},
+    )
+
+@app.route("/api/status_counts")
+def api_status_counts() -> Response:
+    """Return counts of idea statuses for a pie chart."""
+    conn = get_db()
+    rows = conn.execute("SELECT status FROM ideas WHERE archived = 0").fetchall()
+    conn.close()
+    counts = {"Not Started": 0, "In Progress": 0, "Completed": 0}
+    for row in rows:
+        st = row[0] or "Not Started"
+        counts[st] = counts.get(st, 0) + 1
+    return jsonify(counts)
+
+@app.route("/comment/edit/<int:comment_id>", methods=["GET", "POST"])
+def edit_comment(comment_id: int):
+    """Edit an existing comment."""
+    conn = get_db()
+    if request.method == "POST":
+        content = (request.form.get("content") or "").strip()
+        if content:
+            conn.execute("UPDATE comments SET content = ? WHERE id = ?", (content, comment_id))
+            conn.commit()
+        # Redirect back to home (ideally we would redirect to the idea page)
+        conn.close()
+        return redirect(url_for("home"))
+    else:
+        row = conn.execute("SELECT * FROM comments WHERE id = ?", (comment_id,)).fetchone()
+        conn.close()
+        if not row:
+            return redirect(url_for("home"))
+        return render_template("edit_comment.html", app_name=APP_NAME, comment=dict(row))
+
+@app.route("/comment/delete/<int:comment_id>", methods=["POST"]) 
+def delete_comment(comment_id: int) -> Response:
+    """Delete a comment by its ID."""
+    conn = get_db()
+    conn.execute("DELETE FROM comments WHERE id = ?", (comment_id,))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("home"))
 
 
 @app.route("/api/ideas")
